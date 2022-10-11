@@ -1,1 +1,1 @@
-web: ./target/release/openmicc-server
+web: ./target/release/openmicc-server $PORT
