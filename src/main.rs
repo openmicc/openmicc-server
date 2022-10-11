@@ -12,6 +12,6 @@ async fn main() {
     let hello = warp::path!("hello" / String).map(|name| format!("Hello, {}!\n", name));
 
     println!("Serving on port {}.", &flags.port);
-    warp::serve(hello).run(([127, 0, 0, 1], flags.port)).await;
+    warp::serve(hello).run(([0, 0, 0, 0], flags.port)).await;
     println!("Done.");
 }
