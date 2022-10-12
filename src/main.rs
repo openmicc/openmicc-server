@@ -53,7 +53,7 @@ async fn old_main() -> std::io::Result<()> {
 
 struct RedisSubscriber<A: Actor> {
     redis: RedisClient,
-    channels: Vec<String>,
+    channel: String,
     addrs: RwLock<HashSet<Addr<A>>>,
 }
 
@@ -62,10 +62,10 @@ where
     A: Actor + Handler<RedisMessage>,
     A::Context: ToEnvelope<A, RedisMessage>,
 {
-    fn new(redis: RedisClient, channels: Vec<String>) -> Self {
+    fn new<S: ToString>(redis: RedisClient, channel: S) -> Self {
         Self {
             redis,
-            channels,
+            channel: channel.to_string(),
             addrs: Default::default(),
         }
     }
@@ -87,9 +87,7 @@ where
         let mut conn = self.redis.get_connection().context("connecting to redis")?;
         let mut pubsub = conn.as_pubsub();
 
-        for channel in &self.channels {
-            pubsub.subscribe(channel)?;
-        }
+        pubsub.subscribe(&self.channel)?;
         println!("subscribed");
 
         loop {
@@ -354,8 +352,8 @@ async fn main() -> std::io::Result<()> {
     let redis_server_addr = "redis://127.0.0.1:6379";
     let redis_client = RedisClient::open(redis_server_addr).expect("failed to create redis client");
 
-    let channels = vec!["the_news".to_string()];
-    let redis_subscriber = Arc::new(RedisSubscriber::<UserSession>::new(redis_client, channels));
+    let channel = "the_news";
+    let redis_subscriber = Arc::new(RedisSubscriber::<UserSession>::new(redis_client, channel));
 
     let app_data = AppData {
         subscriber: redis_subscriber.clone(),
