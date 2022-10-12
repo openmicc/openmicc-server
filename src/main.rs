@@ -119,12 +119,12 @@ where
     }
 }
 
-struct MyActor {
+struct UserSession {
     redis: RedisClient,
-    subscriber: Arc<RedisSubscriber<MyActor>>,
+    subscriber: Arc<RedisSubscriber<UserSession>>,
 }
 
-impl Actor for MyActor {
+impl Actor for UserSession {
     type Context = ws::WebsocketContext<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
@@ -145,7 +145,7 @@ impl Actor for MyActor {
 
         // // Listen for updates in a separate thread
         // std::thread::spawn(|| {
-        //     subscribe::<MyActor, RedisMessage>(redis, channel, addr).log_expect("redis subscribe")
+        //     subscribe::<UserSession, RedisMessage>(redis, channel, addr).log_expect("redis subscribe")
         // });
 
         // ctx.notify(RedisMessage::Update {
@@ -239,7 +239,7 @@ impl TryFrom<redis::Msg> for RedisMessage {
 
 // async fn run_or_eprintln<F: futures::Future>(fut: F)
 
-impl Handler<RedisMessage> for MyActor {
+impl Handler<RedisMessage> for UserSession {
     type Result = ();
 
     fn handle(&mut self, msg: RedisMessage, _ctx: &mut Self::Context) -> Self::Result {
@@ -253,7 +253,7 @@ impl Handler<RedisMessage> for MyActor {
     }
 }
 
-impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for MyActor {
+impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for UserSession {
     fn handle(&mut self, item: Result<ws::Message, ws::ProtocolError>, ctx: &mut Self::Context) {
         match item {
             Ok(ws::Message::Ping(msg)) => {
@@ -283,7 +283,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for MyActor {
     }
 }
 
-impl Handler<ClientMessage> for MyActor {
+impl Handler<ClientMessage> for UserSession {
     type Result = ();
 
     fn handle(&mut self, msg: ClientMessage, _ctx: &mut Self::Context) -> Self::Result {
@@ -307,7 +307,7 @@ async fn ws_index(
     let redis_server_addr = "redis://127.0.0.1:6379";
     let redis_client = RedisClient::open(redis_server_addr).expect("failed to create redis client");
 
-    let actor = MyActor {
+    let actor = UserSession {
         redis: redis_client,
         subscriber: data.subscriber.clone(),
     };
@@ -339,7 +339,7 @@ async fn hello(
 
 #[derive(Clone)]
 struct AppData {
-    subscriber: Arc<RedisSubscriber<MyActor>>,
+    subscriber: Arc<RedisSubscriber<UserSession>>,
 }
 
 #[actix_web::main]
@@ -357,7 +357,7 @@ async fn main() -> std::io::Result<()> {
     let redis_client = RedisClient::open(redis_server_addr).expect("failed to create redis client");
 
     let channels = vec!["the_news".to_string()];
-    let redis_subscriber = Arc::new(RedisSubscriber::<MyActor>::new(redis_client, channels));
+    let redis_subscriber = Arc::new(RedisSubscriber::<UserSession>::new(redis_client, channels));
 
     let app_data = AppData {
         subscriber: redis_subscriber.clone(),
