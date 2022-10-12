@@ -5,27 +5,22 @@
 
 use std::collections::HashSet;
 use std::convert::TryFrom;
-use std::net::{SocketAddr, SocketAddrV4};
 use std::sync::{Arc, RwLock};
-use std::thread::Thread;
 
 use actix::dev::ToEnvelope;
 use actix::prelude::*;
 
 use actix::{Actor, StreamHandler};
-use actix_web::body::MessageBody;
 use actix_web::error::Error as ActixError;
-use actix_web::App;
 use actix_web::{
     web::{get, Data, Payload},
     HttpRequest, HttpResponse, HttpServer,
 };
+use actix_web::{App, ResponseError};
 use actix_web_actors::ws;
 use anyhow::Context;
-use log_err::LogErrResult;
-use redis::{Client as RedisClient, Connection as RedisConnection, FromRedisValue};
+use redis::{Client as RedisClient, Connection as RedisConnection};
 use serde::Deserialize;
-use tokio::sync::Mutex;
 
 async fn old_main() -> std::io::Result<()> {
     let flags = xflags::parse_or_exit! {
@@ -120,7 +115,7 @@ where
 }
 
 struct UserSession {
-    redis: RedisClient,
+    redis: RedisConnection,
     subscriber: Arc<RedisSubscriber<UserSession>>,
 }
 
@@ -306,9 +301,12 @@ async fn ws_index(
     println!("ws_index");
     let redis_server_addr = "redis://127.0.0.1:6379";
     let redis_client = RedisClient::open(redis_server_addr).expect("failed to create redis client");
+    let redis_conn = redis_client
+        .get_connection()
+        .map_err(|err| actix_web::error::ErrorServiceUnavailable(err))?;
 
     let actor = UserSession {
-        redis: redis_client,
+        redis: redis_conn,
         subscriber: data.subscriber.clone(),
     };
     ws::start(actor, &request, stream)
