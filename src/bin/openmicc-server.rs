@@ -1,22 +1,9 @@
-use std::collections::HashSet;
-use std::convert::TryFrom;
-
-use actix::dev::ToEnvelope;
-use actix::prelude::*;
-
-use actix::{Actor, ActorFutureExt, Context, StreamHandler};
-use actix_web::error::Error as ActixError;
-use actix_web::App;
-use actix_web::{
-    web::{get, Data, Payload},
-    HttpRequest, HttpResponse, HttpServer,
-};
-use actix_web_actors::ws;
-use anyhow::Context as AnyhowContext;
 use clap::Parser;
-use futures::StreamExt;
-use redis::{Client as RedisClient, Commands, Connection as RedisConnection};
-use serde::{Deserialize, Serialize};
+use openmicc_server::{
+    http_server::{run_http_server, AppData},
+    signup_list::start_signup_list,
+};
+use redis::Client as RedisClient;
 
 #[derive(Parser)]
 struct Opts {

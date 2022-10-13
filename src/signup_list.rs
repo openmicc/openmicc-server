@@ -1,39 +1,33 @@
-use std::collections::HashSet;
-use std::convert::TryFrom;
-
-use actix::dev::ToEnvelope;
 use actix::prelude::*;
-
-use actix::{Actor, ActorFutureExt, Context, StreamHandler};
-use actix_web::error::Error as ActixError;
-use actix_web::App;
-use actix_web::{
-    web::{get, Data, Payload},
-    HttpRequest, HttpResponse, HttpServer,
-};
-use actix_web_actors::ws;
 use anyhow::Context as AnyhowContext;
-use clap::Parser;
-use futures::StreamExt;
+use std::collections::HashSet;
+
+use actix::{Actor, Context};
 use redis::{Client as RedisClient, Commands, Connection as RedisConnection};
 use serde::{Deserialize, Serialize};
 
+use crate::constants::{SIGNUP_LIST, SIGNUP_TOPIC};
+use crate::redis_subscriber::{RedisSubscriber, RedisSubscriberMessage};
+use crate::user_session::{SignupListMessage, UserSession};
+use crate::utils::send_or_log_err;
+
 #[derive(Clone, Debug, Message)]
 #[rtype(result = "()")]
-enum RedisMessage {
+pub enum RedisMessage {
     Update { topic: String, content: String },
 }
 
-/// A message from the SignupListActor to the UserSession
-/// with information about the signup list
-#[derive(Clone, Debug, Message, Serialize)]
-#[rtype(result = "anyhow::Result<()>")]
-#[serde(rename_all = "camelCase")]
-#[serde(tag = "type")]
-enum SignupListMessage {
-    // TODO Probably better to have a single ServerMessage type.
-    All { list: SignupList },
-    New { new: Signup },
+impl TryFrom<redis::Msg> for RedisMessage {
+    type Error = anyhow::Error;
+
+    fn try_from(msg: redis::Msg) -> Result<Self, Self::Error> {
+        let topic = msg.get_channel_name().to_string();
+        let content: String = msg.get_payload()?;
+
+        let converted = Self::Update { topic, content };
+
+        Ok(converted)
+    }
 }
 
 impl Handler<RedisMessage> for SignupListActor {
@@ -64,7 +58,7 @@ impl Handler<RedisMessage> for SignupListActor {
 impl Handler<SubscribeToSignupList> for SignupListActor {
     type Result = anyhow::Result<()>;
 
-    fn handle(&mut self, msg: SubscribeToSignupList, ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: SubscribeToSignupList, _ctx: &mut Self::Context) -> Self::Result {
         println!("got signup list subscribe request");
         // Get the current signup list
         let current_list = self.get_list()?;
@@ -87,7 +81,7 @@ impl Handler<SubscribeToSignupList> for SignupListActor {
     }
 }
 
-fn start_signup_list(redis: RedisClient) -> anyhow::Result<Addr<SignupListActor>> {
+pub fn start_signup_list(redis: RedisClient) -> anyhow::Result<Addr<SignupListActor>> {
     // TODO: actors should be able to reconnect to redis
     // (or just die & restart would be fine)
     // ((but then how do others get the new address?))
@@ -104,9 +98,9 @@ fn start_signup_list(redis: RedisClient) -> anyhow::Result<Addr<SignupListActor>
 /// A snapshot of the current signup list is returned.
 #[derive(Debug, Message)]
 #[rtype(result = "anyhow::Result<()>")]
-struct SubscribeToSignupList(pub Addr<UserSession>);
+pub struct SubscribeToSignupList(pub Addr<UserSession>);
 
-struct SignupListActor {
+pub struct SignupListActor {
     /// Resdis client
     client: RedisClient,
     /// Redis connection
@@ -156,7 +150,7 @@ impl SignupListActor {
 
 /// An entry on the signup list.
 #[derive(Clone, Debug, Deserialize, Serialize)]
-struct Signup(String);
+pub struct Signup(String);
 
 impl ToString for Signup {
     fn to_string(&self) -> String {
@@ -172,7 +166,7 @@ impl From<String> for Signup {
 
 /// A snapshot of the whole signup list.
 #[derive(Clone, Debug, Deserialize, Serialize)]
-struct SignupList(Vec<Signup>);
+pub struct SignupList(Vec<Signup>);
 
 impl<E, L> From<L> for SignupList
 where
@@ -206,11 +200,7 @@ impl Actor for SignupListActor {
         println!("signup list actor start finished");
     }
 
-    fn stopped(&mut self, ctx: &mut Self::Context) {
+    fn stopped(&mut self, _ctx: &mut Self::Context) {
         println!("Stop signup list");
-        let addr = ctx.address();
-        println!("unregister");
-        // self.subscriber.unregister(addr);
-        println!("stopped")
     }
 }

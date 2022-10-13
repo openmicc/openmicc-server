@@ -5,37 +5,17 @@ use actix::dev::ToEnvelope;
 use actix::prelude::*;
 
 use actix::{Actor, ActorFutureExt, Context, StreamHandler};
-use actix_web::error::Error as ActixError;
-use actix_web::App;
-use actix_web::{
-    web::{get, Data, Payload},
-    HttpRequest, HttpResponse, HttpServer,
-};
-use actix_web_actors::ws;
-use anyhow::Context as AnyhowContext;
-use clap::Parser;
 use futures::StreamExt;
-use redis::{Client as RedisClient, Commands, Connection as RedisConnection};
-use serde::{Deserialize, Serialize};
+use redis::Client as RedisClient;
+
+use crate::signup_list::RedisMessage;
+use crate::utils::send_or_log_err;
 
 #[derive(Clone, Debug, Message)]
 #[rtype(result = "()")]
-enum RedisSubscriberMessage<A: Actor> {
+pub enum RedisSubscriberMessage<A: Actor> {
     Register(Addr<A>),
     Unregister(Addr<A>),
-}
-
-impl TryFrom<redis::Msg> for RedisMessage {
-    type Error = anyhow::Error;
-
-    fn try_from(msg: redis::Msg) -> Result<Self, Self::Error> {
-        let topic = msg.get_channel_name().to_string();
-        let content: String = msg.get_payload()?;
-
-        let converted = Self::Update { topic, content };
-
-        Ok(converted)
-    }
 }
 
 impl<A> StreamHandler<RedisMessage> for RedisSubscriber<A>
@@ -43,13 +23,13 @@ where
     A: Actor + Handler<RedisMessage>,
     A::Context: ToEnvelope<A, RedisMessage>,
 {
-    fn handle(&mut self, msg: RedisMessage, ctx: &mut Self::Context) {
+    fn handle(&mut self, msg: RedisMessage, _ctx: &mut Self::Context) {
         println!("RS got RedisMessage {:?}", msg);
         self.broadcast(msg);
     }
 }
 
-struct RedisSubscriber<A: Actor> {
+pub struct RedisSubscriber<A: Actor> {
     client: RedisClient,
     topic: String,
     addrs: HashSet<Addr<A>>,
@@ -124,12 +104,12 @@ where
         ctx.spawn(logged);
     }
 
-    fn stopped(&mut self, ctx: &mut Self::Context) {
+    fn stopped(&mut self, _ctx: &mut Self::Context) {
         println!("stopping RedisSubscriber");
     }
 }
 
-fn map_stream<A, S>(res: anyhow::Result<S>, act: &mut A, ctx: &mut A::Context)
+fn map_stream<A, S>(res: anyhow::Result<S>, _act: &mut A, ctx: &mut A::Context)
 where
     A: Actor + StreamHandler<RedisMessage>,
     A::Context: AsyncContext<A>,

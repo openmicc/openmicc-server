@@ -1,22 +1,12 @@
-use std::collections::HashSet;
-use std::convert::TryFrom;
-
-use actix::dev::ToEnvelope;
 use actix::prelude::*;
 
-use actix::{Actor, ActorFutureExt, Context, StreamHandler};
-use actix_web::error::Error as ActixError;
-use actix_web::App;
-use actix_web::{
-    web::{get, Data, Payload},
-    HttpRequest, HttpResponse, HttpServer,
-};
+use actix::{Actor, StreamHandler};
 use actix_web_actors::ws;
 use anyhow::Context as AnyhowContext;
-use clap::Parser;
-use futures::StreamExt;
-use redis::{Client as RedisClient, Commands, Connection as RedisConnection};
 use serde::{Deserialize, Serialize};
+
+use crate::signup_list::{Signup, SignupList, SignupListActor, SubscribeToSignupList};
+use crate::utils::send_or_log_err;
 
 /// Sent from client to sever
 #[derive(Debug, Deserialize, Message)]
@@ -43,8 +33,26 @@ enum ServerMessage {
     // TODO: AreYouReady (ready to perform?)
 }
 
-struct UserSession {
+/// A message from the SignupListActor to the UserSession
+/// with information about the signup list
+#[derive(Clone, Debug, Message, Serialize)]
+#[rtype(result = "anyhow::Result<()>")]
+#[serde(rename_all = "camelCase")]
+#[serde(tag = "type")]
+pub enum SignupListMessage {
+    // TODO Probably better to have a single ServerMessage type.
+    All { list: SignupList },
+    New { new: Signup },
+}
+
+pub struct UserSession {
     signup_list_addr: Addr<SignupListActor>,
+}
+
+impl UserSession {
+    pub fn new(signup_list_addr: Addr<SignupListActor>) -> Self {
+        Self { signup_list_addr }
+    }
 }
 
 impl Actor for UserSession {
@@ -67,7 +75,7 @@ impl Actor for UserSession {
         actix::Running::Stop
     }
 
-    fn stopped(&mut self, ctx: &mut Self::Context) {
+    fn stopped(&mut self, _ctx: &mut Self::Context) {
         println!("stopped");
         // self.signup_feed.unregister(ctx.address());
     }

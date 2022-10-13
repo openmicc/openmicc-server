@@ -1,10 +1,5 @@
-use std::collections::HashSet;
-use std::convert::TryFrom;
-
-use actix::dev::ToEnvelope;
 use actix::prelude::*;
 
-use actix::{Actor, ActorFutureExt, Context, StreamHandler};
 use actix_web::error::Error as ActixError;
 use actix_web::App;
 use actix_web::{
@@ -12,18 +7,16 @@ use actix_web::{
     HttpRequest, HttpResponse, HttpServer,
 };
 use actix_web_actors::ws;
-use anyhow::Context as AnyhowContext;
-use clap::Parser;
-use futures::StreamExt;
-use redis::{Client as RedisClient, Commands, Connection as RedisConnection};
-use serde::{Deserialize, Serialize};
+
+use crate::signup_list::SignupListActor;
+use crate::user_session::UserSession;
 
 #[derive(Clone)]
-struct AppData {
-    signup_list_addr: Addr<SignupListActor>,
+pub struct AppData {
+    pub signup_list_addr: Addr<SignupListActor>,
 }
 
-async fn run_http_server(port: u16, app_data: AppData) -> anyhow::Result<()> {
+pub async fn run_http_server(port: u16, app_data: AppData) -> anyhow::Result<()> {
     let addr = format!("0.0.0.0:{}", port);
     println!("Running on {}", &addr);
 
@@ -61,9 +54,7 @@ async fn ws_index(
     stream: Payload,
 ) -> Result<HttpResponse, ActixError> {
     println!("ws_index");
-    let actor = UserSession {
-        signup_list_addr: data.signup_list_addr.clone(),
-    };
+    let actor = UserSession::new(data.signup_list_addr.clone());
 
     ws::start(actor, &request, stream)
 
