@@ -1,5 +1,6 @@
+use anyhow::Context as AnyhowContext;
 use clap::{Parser, Subcommand};
-use openmicc_server::user_session::SignupListMessage;
+use openmicc_server::user_session::ServerMessage;
 use websocket::{sync::client::ClientBuilder as WebsocketClientBuilder, OwnedMessage};
 
 #[derive(Parser)]
@@ -28,7 +29,8 @@ async fn main() -> anyhow::Result<()> {
         let raw_msg = msg_res?;
         match raw_msg {
             OwnedMessage::Text(text) => {
-                let msg: SignupListMessage = serde_json::from_str(&text)?;
+                let msg: ServerMessage = serde_json::from_str(&text)
+                    .with_context(|| format!("deserializing ServerMessage: '{}'", text))?;
                 println!("Got text message: {:?}", &msg);
             }
             OwnedMessage::Binary(_) => todo!(),

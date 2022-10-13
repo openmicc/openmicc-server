@@ -2,32 +2,43 @@ use actix::prelude::*;
 
 use actix::{Actor, StreamHandler};
 use actix_web_actors::ws;
-use anyhow::Context as AnyhowContext;
+use anyhow::{bail, Context as AnyhowContext};
 use serde::{Deserialize, Serialize};
 
-use crate::signup_list::{Signup, SignupList, SignupListActor, SubscribeToSignupList};
+use crate::greeter::{Greeter, GreeterMessage};
+use crate::signup_list::{Signup, SignupList};
 use crate::utils::send_or_log_err;
 
 /// Sent from client to sever
 #[derive(Debug, Deserialize, Message)]
 #[serde(tag = "action")]
+#[serde(rename_all = "camelCase")]
 #[rtype(result = "()")]
-enum ClientMessage {
+pub enum ClientMessage {
     /// Sign me up.
     SignMeUp(Signup),
     // TODO: ImReady (I'm ready to perform)
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WelcomeInfo {
+    /// Current signup list
+    signup_list: SignupList,
+}
+
+/// Info sent to the client upon connecting to the server
 /// Sent from server to client
-#[derive(Serialize, Message)]
+#[derive(Debug, Message, Deserialize, Serialize)]
 #[serde(tag = "action")]
 #[serde(rename = "camelCase")]
 #[rtype(result = "()")]
-enum ServerMessage {
+pub enum ServerMessage {
+    Welcome(WelcomeInfo),
     // TODO: Pop from list (after finishing)
     // TODO: Remove person from list (dropped out early)
-    /// The whole current sign-up list.
-    SignupList(SignupList),
+    // The whole current sign-up list.
+    // SignupList(SignupList),
     /// A notification of a new sign-up.
     NewSignup(Signup),
     // TODO: AreYouReady (ready to perform?)
@@ -35,10 +46,8 @@ enum ServerMessage {
 
 /// A message from the SignupListActor to the UserSession
 /// with information about the signup list
-#[derive(Clone, Debug, Message, Deserialize, Serialize)]
+#[derive(Clone, Debug, Message)]
 #[rtype(result = "anyhow::Result<()>")]
-#[serde(rename_all = "camelCase")]
-#[serde(tag = "type")]
 pub enum SignupListMessage {
     // TODO Probably better to have a single ServerMessage type.
     All { list: SignupList },
@@ -46,12 +55,29 @@ pub enum SignupListMessage {
 }
 
 pub struct UserSession {
-    signup_list_addr: Addr<SignupListActor>,
+    greeter_addr: Addr<Greeter>,
+    welcomed: bool,
 }
 
 impl UserSession {
-    pub fn new(signup_list_addr: Addr<SignupListActor>) -> Self {
-        Self { signup_list_addr }
+    pub fn new(greeter_addr: Addr<Greeter>) -> Self {
+        Self {
+            greeter_addr,
+            welcomed: false,
+        }
+    }
+
+    /// Send a ServerMessage to the client
+    fn send_msg(
+        &self,
+        ctx: &mut <Self as Actor>::Context,
+        msg: ServerMessage,
+    ) -> anyhow::Result<()> {
+        let serialized = serde_json::to_string(&msg).context("serializing ServerMessage")?;
+        println!("sending message '{}'", serialized);
+        ctx.text(serialized);
+
+        Ok(())
     }
 }
 
@@ -61,11 +87,10 @@ impl Actor for UserSession {
     fn started(&mut self, ctx: &mut Self::Context) {
         println!("started");
 
+        // Say hello to the greeter
         let addr = ctx.address();
-
-        // Subscribe to redis updates
-        let subscribe_msg = SubscribeToSignupList(addr);
-        send_or_log_err(&self.signup_list_addr, subscribe_msg);
+        let hello_msg = GreeterMessage::Hello(addr);
+        send_or_log_err(&self.greeter_addr, hello_msg);
 
         println!("started done");
     }
@@ -86,10 +111,29 @@ impl Handler<SignupListMessage> for UserSession {
 
     fn handle(&mut self, msg: SignupListMessage, ctx: &mut Self::Context) -> Self::Result {
         println!("User got signup list message: {:?}", &msg);
+
+        match (self.welcomed, msg) {
+            (false, SignupListMessage::New { .. }) => {
+                bail!("wasn't expecting update before welcome");
+            }
+            (true, SignupListMessage::All { .. }) => {
+                bail!("wasn't expecing whole list after welcome");
+            }
+            (true, SignupListMessage::New { new }) => {
+                // Signup update
+                let server_msg = ServerMessage::NewSignup(new);
+                self.send_msg(ctx, server_msg)?;
+            }
+            (false, SignupListMessage::All { list }) => {
+                // WelcomeIngo
+                let welcome_info = WelcomeInfo { signup_list: list };
+                let server_msg = ServerMessage::Welcome(welcome_info);
+                self.send_msg(ctx, server_msg)?;
+            }
+        }
+
         // forward the message over WebSockets to the client, encoded as JSON
-        let serialized = serde_json::to_string(&msg).context("serializing SignupListMessage")?;
         println!("Serialized...");
-        ctx.text(serialized);
 
         println!("forwarded signup list message over WS");
 

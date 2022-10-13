@@ -8,12 +8,12 @@ use actix_web::{
 };
 use actix_web_actors::ws;
 
-use crate::signup_list::SignupListActor;
+use crate::greeter::Greeter;
 use crate::user_session::UserSession;
 
 #[derive(Clone)]
 pub struct AppData {
-    pub signup_list_addr: Addr<SignupListActor>,
+    pub greeter_addr: Addr<Greeter>,
 }
 
 pub async fn run_http_server(port: u16, app_data: AppData) -> anyhow::Result<()> {
@@ -54,7 +54,7 @@ async fn ws_index(
     stream: Payload,
 ) -> Result<HttpResponse, ActixError> {
     println!("ws_index");
-    let actor = UserSession::new(data.signup_list_addr.clone());
+    let actor = UserSession::new(data.greeter_addr.clone());
 
     ws::start(actor, &request, stream)
 

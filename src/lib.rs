@@ -1,4 +1,5 @@
 mod constants;
+pub mod greeter;
 pub mod http_server;
 pub mod redis_subscriber;
 pub mod signup_list;

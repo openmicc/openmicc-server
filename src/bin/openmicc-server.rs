@@ -1,5 +1,6 @@
 use clap::Parser;
 use openmicc_server::{
+    greeter::{start_greeter, AddressBook},
     http_server::{run_http_server, AppData},
     signup_list::start_signup_list,
 };
@@ -23,10 +24,13 @@ async fn main() -> anyhow::Result<()> {
 
     // Start signup list
     let redis = RedisClient::open(opts.redis)?;
-    let signup_list_addr = start_signup_list(redis)?;
+    let signup_list = start_signup_list(redis)?;
+
+    let addrs = AddressBook { signup_list };
+    let greeter_addr = start_greeter(addrs);
 
     // Run HTTP server
-    let app_data = AppData { signup_list_addr };
+    let app_data = AppData { greeter_addr };
     run_http_server(opts.port, app_data).await?;
 
     Ok(())
