@@ -10,13 +10,13 @@ use crate::signup_list::{Signup, SignupList};
 use crate::utils::send_or_log_err;
 
 /// Sent from client to sever
-#[derive(Debug, Deserialize, Message)]
+#[derive(Debug, Message, Deserialize, Serialize)]
 #[serde(tag = "action")]
 #[serde(rename_all = "camelCase")]
 #[rtype(result = "()")]
 pub enum ClientMessage {
     /// Sign me up.
-    SignMeUp(Signup),
+    SignMeUp { name: Signup },
     // TODO: ImReady (I'm ready to perform)
 }
 
@@ -176,7 +176,7 @@ impl Handler<ClientMessage> for UserSession {
 
     fn handle(&mut self, msg: ClientMessage, _ctx: &mut Self::Context) -> Self::Result {
         match msg {
-            ClientMessage::SignMeUp(signup) => {
+            ClientMessage::SignMeUp { name } => {
                 // TODO send message to signup list
                 todo!()
             }
