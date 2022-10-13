@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use actix::dev::ToEnvelope;
 use actix::prelude::*;
 
-use actix::{Actor, Context, StreamHandler};
+use actix::{Actor, ActorFutureExt, Context, StreamHandler};
 use actix_web::error::Error as ActixError;
 use actix_web::App;
 use actix_web::{
@@ -22,9 +22,10 @@ use actix_web_actors::ws;
 use anyhow::{bail, Context as AnyhowContext};
 use clap::Parser;
 use futures::{Future, StreamExt};
+use redis::aio::PubSub;
 use redis::{
-    AsyncCommands, Client as RedisClient, Commands, Connection as RedisConnection, ControlFlow,
-    PubSubCommands,
+    aio::Connection as RedisAsyncConnection, AsyncCommands, Client as RedisClient, Commands,
+    Connection as RedisConnection, ControlFlow, PubSubCommands,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
@@ -64,14 +65,9 @@ async fn old_main() -> std::io::Result<()> {
 }
 
 struct RedisSubscriber<A: Actor> {
-    redis: RedisClient,
+    client: RedisClient,
     topic: String,
-    addrs: RwLock<HashSet<Addr<A>>>,
-    /// Only one call to .listen() at a time
-    lock: Mutex<()>,
-    stop_tx: Mutex<Option<oneshot::Sender<()>>>,
-    stop_rx: Mutex<Option<oneshot::Receiver<()>>>,
-    // should_stop: AtomicBool,
+    addrs: HashSet<Addr<A>>,
 }
 
 impl<A> RedisSubscriber<A>
@@ -79,179 +75,119 @@ where
     A: Actor + Handler<RedisMessage>,
     A::Context: ToEnvelope<A, RedisMessage>,
 {
-    pub fn new<S: ToString>(redis: RedisClient, topic: S) -> Self {
-        let (stop_tx, stop_rx) = oneshot::channel();
+    pub fn new<S: ToString>(client: RedisClient, topic: S) -> Self {
         Self {
-            redis,
+            client,
             topic: topic.to_string(),
             addrs: Default::default(),
-            lock: Default::default(),
-            stop_tx: Mutex::new(Some(stop_tx)),
-            stop_rx: Mutex::new(Some(stop_rx)),
-            // should_stop: Default::default(),
         }
     }
 
     /// Register an actor as a forwarding address
-    pub fn register(&self, addr: Addr<A>) {
-        let mut addrs = self.addrs.write().expect("write lock poisoned");
-        addrs.insert(addr);
+    fn register(&mut self, addr: Addr<A>) {
+        self.addrs.insert(addr);
     }
 
     /// Unregister an actor as a forwarding address
-    pub fn unregister(&self, addr: Addr<A>) -> bool {
-        let mut addrs = self.addrs.write().expect("write lock poisoned");
-
-        addrs.remove(&addr)
+    fn unregister(&mut self, addr: Addr<A>) -> bool {
+        self.addrs.remove(&addr)
     }
 
-    /// Stop listening
-    pub fn stop(&self) -> anyhow::Result<()> {
-        println!("sending stop signal to listener");
-        let mut guard = self.stop_tx.lock().expect("stop_tx poisoned");
-        if let Some(stop_tx) = guard.take() {
-            if let Err(_) = stop_tx.send(()) {
-                bail!("failed to send stop signal");
-            }
-        } else {
-            eprintln!("already stopped");
-        }
-        // self.should_stop.store(true, Ordering::SeqCst);
+    fn broadcast(&self, msg: RedisMessage) {
+        println!("Sending to {} addrs", self.addrs.len());
 
-        println!("stop signal sent to listener");
-
-        Ok(())
-    }
-    /// Listen for subscription updates (blocks the thread)
-    pub async fn listen(&self) -> anyhow::Result<()> {
-        println!("listening");
-        let conn = self
-            .redis
-            .get_async_connection()
-            .await
-            .context("connecting to redis")?;
-
-        // Hold the lock while listening
-        // let _guard = self.lock.lock().expect("listen lock poisoned");
-
-        let mut pubsub = conn.into_pubsub();
-        pubsub
-            .subscribe(&self.topic)
-            .await
-            .context("subscribing to topic")?;
-
-        let mut msg_stream = pubsub.into_on_message();
-
-        loop {
-            println!("listen loop");
-            // let (msg_tx, msg_rx) = oneshot::channel();
-            // tokio::spawn_blocking(move || {
-            //     let msg = pubsub.get_message()
-            // })
-            let next = msg_stream.next();
-            match self.broadcast_or_stop(next).await? {
-                ControlFlow::Continue => {
-                    println!("continuing")
-                }
-                ControlFlow::Break(_) => {
-                    println!("breaking");
-                    break;
-                }
-            }
-        }
-
-        println!("subscriber stopped");
-
-        // pubsub.subscribe(&self.topic)?;
-        // println!("subscriber running for topic {}", &self.topic);
-
-        // let (snd, rcv) = tokio::sync::mpsc::unbounded_channel();
-
-        // println!("starting subscribing");
-        // conn.subscribe(&[&self.topic], |msg| {
-        //     if self.should_stop.load(Ordering::SeqCst) {
-        //         return ControlFlow::Break(());
-        //     }
-
-        //     self.broadcast(msg);
-
-        //     // if let Err(err) = snd.send(msg) {
-        //     //     eprintln!("ERROR: {:?}", err);
-        //     // }
-
-        //     ControlFlow::Continue
-        // })?;
-
-        println!("finished subscribing");
-
-        // loop {
-        //     let (msg_tx, msg_rx) = oneshot::channel();
-        //     tokio::spawn_blocking(move || {
-        //         let msg = pubsub.get_message()
-        //     })
-        //     self.broadcast_or_stop(msg_rx)
-        // }
-
-        println!("listen done");
-        Ok(())
-    }
-
-    /// Broadcast the next available message,
-    /// or stop if the signal is received.
-    async fn broadcast_or_stop(
-        &self,
-        next: impl Future<Output = Option<redis::Msg>>,
-    ) -> anyhow::Result<ControlFlow<()>> {
-        let maybe_stop_rx = self.stop_rx.lock().expect("stop_rx poisoned").take();
-
-        println!("broadcast_or_stop");
-        // Take the rx out of the option
-        if let Some(mut stop_rx) = maybe_stop_rx {
-            println!("broadcast has stop_rx");
-            let res = tokio::select! {
-                _ = &mut stop_rx => {
-                    println!("broadcast breaking");
-                    ControlFlow::Break(())
-                },
-                maybe_msg = next => {
-                    println!("broadcast continuing");
-                    if let Some(msg) = maybe_msg {
-                        self.broadcast(msg)?;
-                    }
-                    println!("broadcasted");
-                    ControlFlow::Continue
-                }
-            };
-            println!("broadcast has result");
-
-            // Put the rx back
-            self.stop_rx
-                .lock()
-                .expect("stop_rx poisoned")
-                .replace(stop_rx);
-
-            println!("broadcast replaced stop_rx");
-
-            Ok(res)
-        } else {
-            bail!("could not find stop_rx");
-        }
-    }
-
-    fn broadcast(&self, msg: redis::Msg) -> anyhow::Result<()> {
-        let redis_msg: RedisMessage = msg.try_into()?;
-
-        let addrs = self.addrs.read().expect("read lock poisoned");
-
-        println!("Sending to {} addrs", addrs.len());
-
-        for addr in &*addrs {
-            send_or_log_err(addr, redis_msg.clone());
+        for addr in &self.addrs {
+            send_or_log_err(addr, msg.clone());
         }
 
         println!("sent payload");
+    }
+}
 
-        Ok(())
+impl<A> Actor for RedisSubscriber<A>
+where
+    A: Actor + Handler<RedisMessage>,
+    A::Context: ToEnvelope<A, RedisMessage>,
+{
+    type Context = Context<Self>;
+
+    fn started(&mut self, ctx: &mut Self::Context) {
+        println!("starting RedisSubscriber");
+
+        let topic = self.topic.clone();
+        let client = self.client.clone();
+
+        let block = async move {
+            let redis = client.get_async_connection().await?;
+            let mut pubsub = redis.into_pubsub();
+            pubsub.subscribe(&topic).await?;
+
+            let stream = pubsub.into_on_message();
+            let mapped = stream.filter_map(|msg| async {
+                let res = RedisMessage::try_from(msg);
+                res.map_err(|err| {
+                    eprintln!("Error converting RM: {:?}", err);
+                })
+                .ok()
+            });
+
+            Ok(mapped)
+        };
+
+        let logged = block.into_actor(self).map(map_stream);
+
+        ctx.spawn(logged);
+    }
+
+    fn stopped(&mut self, ctx: &mut Self::Context) {
+        println!("stopping RedisSubscriber");
+    }
+}
+
+fn map_stream<A, S>(res: anyhow::Result<S>, act: &mut A, ctx: &mut A::Context)
+where
+    A: Actor + StreamHandler<RedisMessage>,
+    A::Context: AsyncContext<A>,
+    // A::Context: ToEnvelope<A, RedisMessage>,
+    S: Stream<Item = RedisMessage> + 'static,
+{
+    println!("mapping stream");
+    match res {
+        Ok(stream) => {
+            ctx.add_stream(stream);
+        }
+        Err(err) => {
+            eprintln!("ERROR: {:?}", err);
+        }
+    }
+}
+
+impl<A> Handler<RedisSubscriberMessage<A>> for RedisSubscriber<A>
+where
+    A: Actor + Handler<RedisMessage>,
+    A::Context: ToEnvelope<A, RedisMessage>,
+{
+    type Result = ();
+    fn handle(&mut self, msg: RedisSubscriberMessage<A>, _ctx: &mut Self::Context) {
+        match msg {
+            RedisSubscriberMessage::Register(addr) => {
+                self.register(addr);
+            }
+            RedisSubscriberMessage::Unregister(addr) => {
+                self.unregister(addr);
+            }
+        }
+    }
+}
+
+impl<A> StreamHandler<RedisMessage> for RedisSubscriber<A>
+where
+    A: Actor + Handler<RedisMessage>,
+    A::Context: ToEnvelope<A, RedisMessage>,
+{
+    fn handle(&mut self, msg: RedisMessage, ctx: &mut Self::Context) {
+        println!("RS got RedisMessage {:?}", msg);
+        self.broadcast(msg);
     }
 }
 
@@ -286,10 +222,10 @@ impl Actor for UserSession {
 }
 
 struct SignupListActor {
+    /// Resdis client
+    client: RedisClient,
     /// Redis connection
     redis: RedisConnection,
-    /// Redis subscriber object
-    subscriber: Arc<RedisSubscriber<Self>>,
     /// Users who are subscribed to the list
     users: HashSet<Addr<UserSession>>,
 }
@@ -297,11 +233,10 @@ struct SignupListActor {
 impl SignupListActor {
     fn try_new(client: RedisClient) -> anyhow::Result<Self> {
         let redis = client.get_connection()?;
-        let subscriber = create_redis_subscriber(client.clone(), SIGNUP_TOPIC);
 
         let new = Self {
+            client,
             redis,
-            subscriber,
             users: Default::default(),
         };
 
@@ -372,10 +307,20 @@ impl Actor for SignupListActor {
 
         // Register for updates & start subscriber
         let addr = ctx.address();
-        self.subscriber.register(addr);
-        let cloned_subscriber = self.subscriber.clone();
+
+        let subscriber = RedisSubscriber::<Self>::new(self.client.clone(), SIGNUP_TOPIC);
+        let subscriber_addr = subscriber.start();
+        let register_msg = RedisSubscriberMessage::Register(addr);
+
+        subscriber_addr
+            .try_send(register_msg)
+            .context("failed to register with subscriber")
+            .map_err(|err| eprintln!("ERR: {:?}", err))
+            .ok();
+
+        // self.subscriber.register(addr);
+        // let cloned_subscriber = self.subscriber.clone();
         println!("spawning listener");
-        tokio::spawn(async move { cloned_subscriber.listen().await });
         println!("listener spawned");
 
         println!("signup list actor start finished");
@@ -385,8 +330,7 @@ impl Actor for SignupListActor {
         println!("Stop signup list");
         let addr = ctx.address();
         println!("unregister");
-        self.subscriber.unregister(addr);
-        self.subscriber.stop().expect("failed to stop subscriber");
+        // self.subscriber.unregister(addr);
         println!("stopped")
     }
 }
@@ -436,6 +380,13 @@ enum SignupListMessage {
     // TODO Probably better to have a single ServerMessage type.
     All { list: SignupList },
     New { new: Signup },
+}
+
+#[derive(Clone, Debug, Message)]
+#[rtype(result = "()")]
+enum RedisSubscriberMessage<A: Actor> {
+    Register(Addr<A>),
+    Unregister(Addr<A>),
 }
 
 #[derive(Clone, Debug, Message)]
@@ -639,12 +590,12 @@ struct AppData {
     signup_list_addr: Addr<SignupListActor>,
 }
 
-fn create_redis_subscriber<S: ToString>(
-    redis: RedisClient,
-    topic: S,
-) -> Arc<RedisSubscriber<SignupListActor>> {
-    Arc::new(RedisSubscriber::new(redis, topic))
-}
+// fn create_redis_subscriber<S: ToString>(
+//     redis: RedisClient,
+//     topic: S,
+// ) -> Arc<RedisSubscriber<SignupListActor>> {
+//     Arc::new(RedisSubscriber::new(redis, topic))
+// }
 
 async fn run_http_server(port: u16, app_data: AppData) -> anyhow::Result<()> {
     let addr = format!("0.0.0.0:{}", port);
