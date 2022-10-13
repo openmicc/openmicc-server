@@ -3,8 +3,8 @@ use anyhow::Context as AnyhowContext;
 use futures::FutureExt;
 
 use crate::{
-    signup_list::{SignupListActor, SubscribeToSignupList},
-    user_session::UserSession,
+    signup_list::SignupListActor,
+    user_session::{UserSession, WelcomeMessage},
 };
 
 #[derive(Debug, Clone, Message)]
@@ -15,6 +15,32 @@ pub enum GreeterMessage {
 }
 
 #[derive(Clone)]
+pub enum OnboardingTask {
+    SubscribeToSignupList,
+}
+
+#[derive(Clone)]
+pub struct OnboardingChecklist(Vec<OnboardingTask>);
+
+impl OnboardingChecklist {
+    pub fn new() -> Self {
+        let tasks = vec![OnboardingTask::SubscribeToSignupList];
+
+        Self(tasks)
+    }
+}
+
+impl IntoIterator for OnboardingChecklist {
+    type Item = OnboardingTask;
+
+    type IntoIter = std::vec::IntoIter<OnboardingTask>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct AddressBook {
     pub signup_list: Addr<SignupListActor>,
 }
@@ -27,27 +53,6 @@ impl Greeter {
     pub fn new(addrs: AddressBook) -> Self {
         Self { addrs }
     }
-}
-
-/// Perform any necessary onboarding tasks for a newly connected user
-async fn onboard_user(addrs: AddressBook, user: Addr<UserSession>) -> anyhow::Result<()> {
-    subscribe_user_to_signup_list(addrs.signup_list, user).await?;
-
-    Ok(())
-}
-
-async fn subscribe_user_to_signup_list(
-    signup_list: Addr<SignupListActor>,
-    user: Addr<UserSession>,
-) -> anyhow::Result<()> {
-    let subscribe_msg = SubscribeToSignupList(user);
-    signup_list
-        .send(subscribe_msg)
-        .await
-        .context("sending subscribe message to signup list")?
-        .context("response from signup list")?;
-
-    Ok(())
 }
 
 impl Actor for Greeter {
@@ -69,12 +74,17 @@ impl Handler<GreeterMessage> for Greeter {
         match msg {
             GreeterMessage::Hello(user) => {
                 let addrs = self.addrs.clone();
-                let fut = onboard_user(addrs, user).map(|res| {
-                    res.context("onboarding user")
-                        .map_err(|err| eprintln!("ERROR: {:?}", err))
+
+                let checklist = OnboardingChecklist::new();
+
+                let welcome_info = WelcomeMessage { addrs, checklist };
+                let send_fut = user.send(welcome_info).map(|res| {
+                    res.context("sending welcome info to user")
+                        .map_err(|err| eprintln!("{:#}", err))
                         .ok();
                 });
-                let actor_fut = fut.into_actor(self);
+
+                let actor_fut = send_fut.into_actor(self);
                 ctx.spawn(actor_fut);
             }
         }

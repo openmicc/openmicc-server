@@ -5,8 +5,8 @@ use actix_web_actors::ws;
 use anyhow::{bail, Context as AnyhowContext};
 use serde::{Deserialize, Serialize};
 
-use crate::greeter::{Greeter, GreeterMessage};
-use crate::signup_list::{Signup, SignupList};
+use crate::greeter::{AddressBook, Greeter, GreeterMessage, OnboardingChecklist, OnboardingTask};
+use crate::signup_list::{Signup, SignupList, SubscribeToSignupList};
 use crate::utils::send_or_log_err;
 
 /// Sent from client to sever
@@ -49,22 +49,98 @@ pub enum ServerMessage {
 #[derive(Clone, Debug, Message)]
 #[rtype(result = "anyhow::Result<()>")]
 pub enum SignupListMessage {
-    // TODO Probably better to have a single ServerMessage type.
     All { list: SignupList },
     New { new: Signup },
 }
 
+/// Sent from `Greeter` to `UserSession` upon connection
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct WelcomeMessage {
+    pub addrs: AddressBook,
+    pub checklist: OnboardingChecklist,
+}
+
 pub struct UserSession {
     greeter_addr: Addr<Greeter>,
-    welcomed: bool,
+    state: State,
+}
+
+enum State {
+    /// Just connected, haven't done anything yet
+    Fresh,
+    /// We've already received the `WelcomeMessage`, but haven't finished onboarding
+    Onboarding {
+        /// Address book from the Greeter
+        addrs: AddressBook,
+    },
+    /// Finished onboarding
+    Onboarded {
+        /// Address book from the Greeter
+        addrs: AddressBook,
+    },
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self::Fresh
+    }
 }
 
 impl UserSession {
     pub fn new(greeter_addr: Addr<Greeter>) -> Self {
         Self {
             greeter_addr,
-            welcomed: false,
+            state: Default::default(),
         }
+    }
+
+    fn subscribe_to_signup_list(&self, ctx: &<Self as Actor>::Context) -> anyhow::Result<()> {
+        if let State::Onboarding { addrs } = &self.state {
+            let my_addr = ctx.address();
+            let subscribe_msg = SubscribeToSignupList(my_addr);
+            send_or_log_err(&addrs.signup_list, subscribe_msg);
+        } else {
+            bail!("can only subscribe to signup list during onboarding");
+        }
+
+        Ok(())
+    }
+
+    fn do_onboarding_task(
+        &self,
+        ctx: &<Self as Actor>::Context,
+        task: OnboardingTask,
+    ) -> anyhow::Result<()> {
+        match task {
+            OnboardingTask::SubscribeToSignupList => self.subscribe_to_signup_list(ctx),
+        }
+    }
+
+    fn onboard(
+        &mut self,
+        ctx: &<Self as Actor>::Context,
+        checklist: OnboardingChecklist,
+    ) -> anyhow::Result<()> {
+        match &self.state {
+            State::Onboarding { addrs } => {
+                for task in checklist {
+                    self.do_onboarding_task(ctx, task)
+                        .context("onboarding task")
+                        .map_err(|err| eprintln!("{:#}", err))
+                        .ok();
+                }
+
+                self.state = State::Onboarded {
+                    addrs: addrs.clone(),
+                };
+
+                println!("User finished onboarding");
+            }
+            _ => bail!("Can only onboard in Onboarding state"),
+        }
+
+        Ok(())
     }
 
     /// Send a ServerMessage to the client
@@ -112,22 +188,22 @@ impl Handler<SignupListMessage> for UserSession {
     fn handle(&mut self, msg: SignupListMessage, ctx: &mut Self::Context) -> Self::Result {
         println!("User got signup list message: {:?}", &msg);
 
-        match (self.welcomed, msg) {
-            (false, SignupListMessage::New { .. }) => {
-                bail!("wasn't expecting update before welcome");
-            }
-            (true, SignupListMessage::All { .. }) => {
-                bail!("wasn't expecing whole list after welcome");
-            }
-            (true, SignupListMessage::New { new }) => {
-                // Signup update
-                let server_msg = ServerMessage::NewSignup(new);
+        if let State::Fresh = self.state {
+            bail!("wasn't expecting SignupListMessage before welcoming");
+        }
+
+        match msg {
+            SignupListMessage::All { list } => {
+                // WelcomeInfo
+                let welcome_info = WelcomeInfo { signup_list: list };
+                // TODO: This is a bit confusing that we're sending a
+                // `ServerMessage::Welcome` in the `Welcomed` state.
+                let server_msg = ServerMessage::Welcome(welcome_info);
                 self.send_msg(ctx, server_msg)?;
             }
-            (false, SignupListMessage::All { list }) => {
-                // WelcomeIngo
-                let welcome_info = WelcomeInfo { signup_list: list };
-                let server_msg = ServerMessage::Welcome(welcome_info);
+            SignupListMessage::New { new } => {
+                // Signup update
+                let server_msg = ServerMessage::NewSignup(new);
                 self.send_msg(ctx, server_msg)?;
             }
         }
@@ -180,6 +256,23 @@ impl Handler<ClientMessage> for UserSession {
                 // TODO send message to signup list
                 todo!()
             }
+        }
+    }
+}
+
+impl Handler<WelcomeMessage> for UserSession {
+    type Result = ();
+
+    fn handle(&mut self, msg: WelcomeMessage, ctx: &mut Self::Context) -> Self::Result {
+        match self.state {
+            State::Fresh => {
+                self.state = State::Onboarding { addrs: msg.addrs };
+                self.onboard(ctx, msg.checklist)
+                    .context("onboarding - handling welcome message")
+                    .map_err(|err| eprintln!("ERR: {:#}", err))
+                    .ok();
+            }
+            _ => eprintln!("WARN: Already welcomed..."),
         }
     }
 }
