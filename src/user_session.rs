@@ -35,7 +35,7 @@ enum ServerMessage {
 
 /// A message from the SignupListActor to the UserSession
 /// with information about the signup list
-#[derive(Clone, Debug, Message, Serialize)]
+#[derive(Clone, Debug, Message, Deserialize, Serialize)]
 #[rtype(result = "anyhow::Result<()>")]
 #[serde(rename_all = "camelCase")]
 #[serde(tag = "type")]
