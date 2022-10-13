@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::convert::TryFrom;
+use std::fmt::Debug;
 
 use actix::dev::ToEnvelope;
 use actix::prelude::*;
@@ -7,16 +8,25 @@ use actix::prelude::*;
 use actix::{Actor, ActorFutureExt, Context, StreamHandler};
 use futures::StreamExt;
 use redis::Client as RedisClient;
-use tracing::info;
+use tracing::{info, instrument};
 
 use crate::signup_list::RedisMessage;
 use crate::utils::{send_or_log_err, LogOk};
 
-#[derive(Clone, Debug, Message)]
+#[derive(Clone, Message)]
 #[rtype(result = "()")]
 pub enum RedisSubscriberMessage<A: Actor> {
     Register(Addr<A>),
     Unregister(Addr<A>),
+}
+
+impl<A: Actor> Debug for RedisSubscriberMessage<A> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Register(arg0) => f.debug_tuple("Register").field(arg0).finish(),
+            Self::Unregister(arg0) => f.debug_tuple("Unregister").field(arg0).finish(),
+        }
+    }
 }
 
 impl<A> StreamHandler<RedisMessage> for RedisSubscriber<A>
@@ -24,6 +34,7 @@ where
     A: Actor + Handler<RedisMessage>,
     A::Context: ToEnvelope<A, RedisMessage>,
 {
+    #[instrument(skip(_ctx), name = "RedisMessageStreamHandler")]
     fn handle(&mut self, msg: RedisMessage, _ctx: &mut Self::Context) {
         info!("RS got RedisMessage {:?}", msg);
         self.broadcast(msg);
@@ -34,6 +45,15 @@ pub struct RedisSubscriber<A: Actor> {
     client: RedisClient,
     topic: String,
     addrs: HashSet<Addr<A>>,
+}
+
+impl<A: Actor> Debug for RedisSubscriber<A> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RedisSubscriber")
+            .field("client", &self.client)
+            .field("topic", &self.topic)
+            .finish()
+    }
 }
 
 impl<A> RedisSubscriber<A>
@@ -50,15 +70,18 @@ where
     }
 
     /// Register an actor as a forwarding address
+    #[instrument]
     fn register(&mut self, addr: Addr<A>) {
         self.addrs.insert(addr);
     }
 
     /// Unregister an actor as a forwarding address
+    #[instrument]
     fn unregister(&mut self, addr: Addr<A>) -> bool {
         self.addrs.remove(&addr)
     }
 
+    #[instrument]
     fn broadcast(&self, msg: RedisMessage) {
         info!("Sending to {} addrs", self.addrs.len());
 
@@ -77,6 +100,7 @@ where
 {
     type Context = Context<Self>;
 
+    #[instrument(skip(ctx))]
     fn started(&mut self, ctx: &mut Self::Context) {
         info!("starting RedisSubscriber");
 
@@ -100,6 +124,7 @@ where
         ctx.spawn(logged);
     }
 
+    #[instrument(skip(_ctx))]
     fn stopped(&mut self, _ctx: &mut Self::Context) {
         info!("stopping RedisSubscriber");
     }
@@ -121,6 +146,7 @@ where
     A::Context: ToEnvelope<A, RedisMessage>,
 {
     type Result = ();
+    #[instrument(skip(_ctx), name = "RedisSubscriberMessageHandler")]
     fn handle(&mut self, msg: RedisSubscriberMessage<A>, _ctx: &mut Self::Context) {
         match msg {
             RedisSubscriberMessage::Register(addr) => {

@@ -61,11 +61,13 @@ pub struct WelcomeMessage {
     pub checklist: OnboardingChecklist,
 }
 
+#[derive(Debug)]
 pub struct UserSession {
     greeter_addr: MyAddr<Greeter>,
     state: State,
 }
 
+#[derive(Debug, Clone)]
 enum State {
     /// Just connected, haven't done anything yet
     Fresh,
@@ -88,6 +90,7 @@ impl Default for State {
 }
 
 impl UserSession {
+    #[instrument]
     pub fn new(greeter_addr: MyAddr<Greeter>) -> Self {
         Self {
             greeter_addr,
@@ -95,6 +98,7 @@ impl UserSession {
         }
     }
 
+    #[instrument(skip(ctx))]
     fn subscribe_to_signup_list(&self, ctx: &<Self as Actor>::Context) -> anyhow::Result<()> {
         if let State::Onboarding { addrs } = &self.state {
             let my_addr = ctx.address();
@@ -107,6 +111,7 @@ impl UserSession {
         Ok(())
     }
 
+    #[instrument(skip(ctx))]
     fn do_onboarding_task(
         &self,
         ctx: &<Self as Actor>::Context,
@@ -117,6 +122,7 @@ impl UserSession {
         }
     }
 
+    #[instrument(skip(ctx))]
     fn onboard(
         &mut self,
         ctx: &<Self as Actor>::Context,
@@ -143,6 +149,7 @@ impl UserSession {
     }
 
     /// Send a ServerMessage to the client
+    #[instrument(skip(ctx))]
     fn send_msg(
         &self,
         ctx: &mut <Self as Actor>::Context,
@@ -159,6 +166,7 @@ impl UserSession {
 impl Actor for UserSession {
     type Context = ws::WebsocketContext<Self>;
 
+    #[instrument(skip(ctx))]
     fn started(&mut self, ctx: &mut Self::Context) {
         info!("started");
 
@@ -170,11 +178,13 @@ impl Actor for UserSession {
         info!("started done");
     }
 
+    #[instrument(skip(_ctx))]
     fn stopping(&mut self, _ctx: &mut Self::Context) -> actix::Running {
         info!("stopping");
         actix::Running::Stop
     }
 
+    #[instrument(skip(_ctx))]
     fn stopped(&mut self, _ctx: &mut Self::Context) {
         info!("stopped");
         // self.signup_feed.unregister(ctx.address());
@@ -184,6 +194,7 @@ impl Actor for UserSession {
 impl Handler<SignupListMessage> for UserSession {
     type Result = anyhow::Result<()>;
 
+    #[instrument(skip(ctx), name = "SignupListMessageHandler")]
     fn handle(&mut self, msg: SignupListMessage, ctx: &mut Self::Context) -> Self::Result {
         info!("User got signup list message: {:?}", &msg);
 
@@ -217,6 +228,7 @@ impl Handler<SignupListMessage> for UserSession {
 }
 
 impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for UserSession {
+    #[instrument(skip(ctx), name = "WsMessageStreamHandler")]
     fn handle(&mut self, item: Result<ws::Message, ws::ProtocolError>, ctx: &mut Self::Context) {
         match item {
             Ok(ws::Message::Ping(msg)) => {
@@ -249,6 +261,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for UserSession {
 impl Handler<ClientMessage> for UserSession {
     type Result = ();
 
+    #[instrument(skip(_ctx), name = "ClientMessageHandler")]
     fn handle(&mut self, msg: ClientMessage, _ctx: &mut Self::Context) -> Self::Result {
         match msg {
             ClientMessage::SignMeUp { name } => {

@@ -1,7 +1,9 @@
+use std::fmt::Debug;
+
 use actix::{Actor, Addr, AsyncContext, Context, Handler, Message, WrapFuture};
 use anyhow::Context as AnyhowContext;
 use futures::FutureExt;
-use tracing::info;
+use tracing::{info, instrument};
 
 use crate::{
     signup_list::SignupListActor,
@@ -16,12 +18,12 @@ pub enum GreeterMessage {
     Hello(Addr<UserSession>),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum OnboardingTask {
     SubscribeToSignupList,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct OnboardingChecklist(Vec<OnboardingTask>);
 
 impl OnboardingChecklist {
@@ -68,10 +70,12 @@ impl Greeter {
 impl Actor for Greeter {
     type Context = Context<Self>;
 
+    #[instrument(skip_all)]
     fn started(&mut self, _ctx: &mut Self::Context) {
         info!("Started greeter");
     }
 
+    #[instrument(skip_all)]
     fn stopped(&mut self, _ctx: &mut Self::Context) {
         info!("Stopped greeter");
     }
@@ -80,6 +84,7 @@ impl Actor for Greeter {
 impl Handler<GreeterMessage> for Greeter {
     type Result = ();
 
+    #[instrument(skip(self, ctx), name = "GreeterMessageHandler")]
     fn handle(&mut self, msg: GreeterMessage, ctx: &mut Self::Context) -> Self::Result {
         match msg {
             GreeterMessage::Hello(user) => {
@@ -99,6 +104,7 @@ impl Handler<GreeterMessage> for Greeter {
     }
 }
 
+#[instrument]
 pub fn start_greeter(addrs: AddressBook) -> Addr<Greeter> {
     let greeter = Greeter::new(addrs);
     greeter.start()

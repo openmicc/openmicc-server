@@ -38,6 +38,7 @@ pub async fn run_http_server(port: u16, app_data: AppData) -> anyhow::Result<()>
     Ok(())
 }
 
+#[instrument(skip_all)]
 async fn hello(
     _request: HttpRequest,
     _data: Data<AppData>,
@@ -52,6 +53,7 @@ async fn hello(
 /// Function that receives HTTP request on WebSocket route and upgrades it to WebSocket connection.
 ///
 /// See https://actix.rs/docs/websockets/ for official `actix-web` documentation.
+#[instrument(skip_all)]
 async fn ws_index(
     request: HttpRequest,
     data: Data<AppData>,

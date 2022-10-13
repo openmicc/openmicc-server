@@ -5,7 +5,7 @@ use actix::{Actor, Context};
 use anyhow::Context as AnyhowContext;
 use redis::{Client as RedisClient, Commands, Connection as RedisConnection};
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{info, instrument};
 
 use crate::constants::{SIGNUP_LIST, SIGNUP_TOPIC};
 use crate::redis_subscriber::{RedisSubscriber, RedisSubscriberMessage};
@@ -21,6 +21,7 @@ pub enum RedisMessage {
 impl TryFrom<redis::Msg> for RedisMessage {
     type Error = anyhow::Error;
 
+    #[instrument]
     fn try_from(msg: redis::Msg) -> Result<Self, Self::Error> {
         let topic = msg.get_channel_name().to_string();
         let content: String = msg.get_payload()?;
@@ -34,6 +35,7 @@ impl TryFrom<redis::Msg> for RedisMessage {
 impl Handler<RedisMessage> for SignupListActor {
     type Result = ();
 
+    #[instrument(skip(self, _ctx), name = "RedisMessageHandler")]
     fn handle(&mut self, msg: RedisMessage, _ctx: &mut Self::Context) -> Self::Result {
         info!("handle redis message");
         match msg {
@@ -59,6 +61,7 @@ impl Handler<RedisMessage> for SignupListActor {
 impl Handler<SubscribeToSignupList> for SignupListActor {
     type Result = anyhow::Result<()>;
 
+    #[instrument(skip(self, _ctx), name = "SubscribeToSignupListHandler")]
     fn handle(&mut self, msg: SubscribeToSignupList, _ctx: &mut Self::Context) -> Self::Result {
         info!("got signup list subscribe request");
         // Get the current signup list
@@ -111,6 +114,7 @@ pub struct SignupListActor {
 }
 
 impl SignupListActor {
+    #[instrument]
     fn try_new(client: RedisClient) -> anyhow::Result<Self> {
         let redis = client.get_connection()?;
 
@@ -123,6 +127,7 @@ impl SignupListActor {
         Ok(new)
     }
 
+    #[instrument(skip(self))]
     fn publish_signup(&mut self, signup: Signup) -> anyhow::Result<()> {
         let signup_string = signup.to_string();
 
@@ -142,6 +147,7 @@ impl SignupListActor {
         Ok(())
     }
 
+    #[instrument(skip(self))]
     fn get_list(&mut self) -> anyhow::Result<SignupList> {
         let list: Vec<String> = self.redis.lrange(SIGNUP_LIST, 0, -1)?;
 
