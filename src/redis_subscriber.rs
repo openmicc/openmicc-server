@@ -50,7 +50,6 @@ pub struct RedisSubscriber<A: Actor> {
 impl<A: Actor> Debug for RedisSubscriber<A> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RedisSubscriber")
-            .field("client", &self.client)
             .field("topic", &self.topic)
             .finish()
     }
