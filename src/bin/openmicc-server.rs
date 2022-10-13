@@ -1,10 +1,13 @@
+use anyhow::Context;
 use clap::Parser;
 use openmicc_server::{
     greeter::{start_greeter, AddressBook},
     http_server::{run_http_server, AppData},
     signup_list::start_signup_list,
+    utils::WrapAddr,
 };
 use redis::Client as RedisClient;
+use tracing::error;
 
 #[derive(Parser)]
 struct Opts {
@@ -16,17 +19,24 @@ struct Opts {
     redis: String,
 }
 
+fn init_tracing() {
+    tracing_subscriber::fmt().pretty().init();
+}
+
 #[actix_web::main]
 async fn main() -> anyhow::Result<()> {
     // Initialize
-    env_logger::init();
+    init_tracing();
     let opts = Opts::parse();
 
-    // Start signup list
-    let redis = RedisClient::open(opts.redis)?;
-    let signup_list = start_signup_list(redis)?;
+    error!("Here's an error for you.");
 
-    let addrs = AddressBook { signup_list };
+    // Start signup list
+    let redis = RedisClient::open(opts.redis).context("creating redis client")?;
+    let signup_list = start_signup_list(redis).context("starting signup list")?;
+    let addr = signup_list.wrap();
+
+    let addrs = AddressBook { signup_list: addr };
     let greeter_addr = start_greeter(addrs);
 
     // Run HTTP server

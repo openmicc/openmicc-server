@@ -1,5 +1,4 @@
 use actix::prelude::*;
-
 use actix_web::error::Error as ActixError;
 use actix_web::App;
 use actix_web::{
@@ -7,18 +6,23 @@ use actix_web::{
     HttpRequest, HttpResponse, HttpServer,
 };
 use actix_web_actors::ws;
+use tracing::{error, info, instrument};
 
 use crate::greeter::Greeter;
 use crate::user_session::UserSession;
+use crate::utils::WrapAddr;
 
 #[derive(Clone)]
 pub struct AppData {
     pub greeter_addr: Addr<Greeter>,
 }
 
+#[instrument(skip(app_data))]
 pub async fn run_http_server(port: u16, app_data: AppData) -> anyhow::Result<()> {
     let addr = format!("0.0.0.0:{}", port);
-    println!("Running on {}", &addr);
+    info!("Running on {}", &addr);
+
+    error!("Here's an instrumented error!");
 
     HttpServer::new(move || {
         App::new()
@@ -39,7 +43,7 @@ async fn hello(
     _data: Data<AppData>,
     _stream: Payload,
 ) -> Result<HttpResponse, ActixError> {
-    println!("Hello");
+    info!("Hello");
     let response = HttpResponse::Ok().body("Great job.".to_string());
 
     Ok(response)
@@ -53,18 +57,18 @@ async fn ws_index(
     data: Data<AppData>,
     stream: Payload,
 ) -> Result<HttpResponse, ActixError> {
-    println!("ws_index");
-    let actor = UserSession::new(data.greeter_addr.clone());
+    info!("ws_index");
+    let actor = UserSession::new(data.greeter_addr.clone().wrap());
 
     ws::start(actor, &request, stream)
 
     // match EchoConnection::new(&worker_manager).await {
     //     Ok(echo_server) => {
-    //         println!("Started echo server (upgrade WS)");
+    //         info!("Started echo server (upgrade WS)");
     //         ws::start(echo_server, &request, stream)
     //     }
     //     Err(error) => {
-    //         eprintln!("{}", error);
+    //         error!("{}", error);
 
     //         Ok(HttpResponse::InternalServerError().finish())
     //     }

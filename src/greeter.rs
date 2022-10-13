@@ -1,10 +1,12 @@
 use actix::{Actor, Addr, AsyncContext, Context, Handler, Message, WrapFuture};
 use anyhow::Context as AnyhowContext;
 use futures::FutureExt;
+use tracing::info;
 
 use crate::{
     signup_list::SignupListActor,
     user_session::{UserSession, WelcomeMessage},
+    utils::{LogError, MyAddr},
 };
 
 #[derive(Debug, Clone, Message)]
@@ -40,9 +42,17 @@ impl IntoIterator for OnboardingChecklist {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct AddressBook {
-    pub signup_list: Addr<SignupListActor>,
+    pub signup_list: MyAddr<SignupListActor>,
+}
+
+impl Clone for AddressBook {
+    fn clone(&self) -> Self {
+        Self {
+            signup_list: self.signup_list.clone(),
+        }
+    }
 }
 
 pub struct Greeter {
@@ -59,11 +69,11 @@ impl Actor for Greeter {
     type Context = Context<Self>;
 
     fn started(&mut self, _ctx: &mut Self::Context) {
-        println!("Started greeter");
+        info!("Started greeter");
     }
 
     fn stopped(&mut self, _ctx: &mut Self::Context) {
-        println!("Stopped greeter");
+        info!("Stopped greeter");
     }
 }
 
@@ -79,9 +89,7 @@ impl Handler<GreeterMessage> for Greeter {
 
                 let welcome_info = WelcomeMessage { addrs, checklist };
                 let send_fut = user.send(welcome_info).map(|res| {
-                    res.context("sending welcome info to user")
-                        .map_err(|err| eprintln!("{:#}", err))
-                        .ok();
+                    res.context("sending welcome info to user").log_err();
                 });
 
                 let actor_fut = send_fut.into_actor(self);

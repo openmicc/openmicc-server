@@ -1,13 +1,13 @@
 use actix::prelude::*;
-
 use actix::{Actor, StreamHandler};
 use actix_web_actors::ws;
 use anyhow::{bail, Context as AnyhowContext};
 use serde::{Deserialize, Serialize};
+use tracing::{error, info, instrument, warn};
 
 use crate::greeter::{AddressBook, Greeter, GreeterMessage, OnboardingChecklist, OnboardingTask};
 use crate::signup_list::{Signup, SignupList, SubscribeToSignupList};
-use crate::utils::send_or_log_err;
+use crate::utils::{send_or_log_err, LogError, MyAddr, WrapAddr};
 
 /// Sent from client to sever
 #[derive(Debug, Message, Deserialize, Serialize)]
@@ -62,7 +62,7 @@ pub struct WelcomeMessage {
 }
 
 pub struct UserSession {
-    greeter_addr: Addr<Greeter>,
+    greeter_addr: MyAddr<Greeter>,
     state: State,
 }
 
@@ -88,7 +88,7 @@ impl Default for State {
 }
 
 impl UserSession {
-    pub fn new(greeter_addr: Addr<Greeter>) -> Self {
+    pub fn new(greeter_addr: MyAddr<Greeter>) -> Self {
         Self {
             greeter_addr,
             state: Default::default(),
@@ -98,7 +98,7 @@ impl UserSession {
     fn subscribe_to_signup_list(&self, ctx: &<Self as Actor>::Context) -> anyhow::Result<()> {
         if let State::Onboarding { addrs } = &self.state {
             let my_addr = ctx.address();
-            let subscribe_msg = SubscribeToSignupList(my_addr);
+            let subscribe_msg = SubscribeToSignupList(my_addr.wrap());
             send_or_log_err(&addrs.signup_list, subscribe_msg);
         } else {
             bail!("can only subscribe to signup list during onboarding");
@@ -127,15 +127,14 @@ impl UserSession {
                 for task in checklist {
                     self.do_onboarding_task(ctx, task)
                         .context("onboarding task")
-                        .map_err(|err| eprintln!("{:#}", err))
-                        .ok();
+                        .log_err();
                 }
 
                 self.state = State::Onboarded {
                     addrs: addrs.clone(),
                 };
 
-                println!("User finished onboarding");
+                info!("User finished onboarding");
             }
             _ => bail!("Can only onboard in Onboarding state"),
         }
@@ -150,7 +149,7 @@ impl UserSession {
         msg: ServerMessage,
     ) -> anyhow::Result<()> {
         let serialized = serde_json::to_string(&msg).context("serializing ServerMessage")?;
-        println!("sending message '{}'", serialized);
+        info!("sending message '{}'", serialized);
         ctx.text(serialized);
 
         Ok(())
@@ -161,23 +160,23 @@ impl Actor for UserSession {
     type Context = ws::WebsocketContext<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
-        println!("started");
+        info!("started");
 
         // Say hello to the greeter
         let addr = ctx.address();
         let hello_msg = GreeterMessage::Hello(addr);
         send_or_log_err(&self.greeter_addr, hello_msg);
 
-        println!("started done");
+        info!("started done");
     }
 
     fn stopping(&mut self, _ctx: &mut Self::Context) -> actix::Running {
-        println!("stopping");
+        info!("stopping");
         actix::Running::Stop
     }
 
     fn stopped(&mut self, _ctx: &mut Self::Context) {
-        println!("stopped");
+        info!("stopped");
         // self.signup_feed.unregister(ctx.address());
     }
 }
@@ -186,7 +185,7 @@ impl Handler<SignupListMessage> for UserSession {
     type Result = anyhow::Result<()>;
 
     fn handle(&mut self, msg: SignupListMessage, ctx: &mut Self::Context) -> Self::Result {
-        println!("User got signup list message: {:?}", &msg);
+        info!("User got signup list message: {:?}", &msg);
 
         if let State::Fresh = self.state {
             bail!("wasn't expecting SignupListMessage before welcoming");
@@ -209,9 +208,9 @@ impl Handler<SignupListMessage> for UserSession {
         }
 
         // forward the message over WebSockets to the client, encoded as JSON
-        println!("Serialized...");
+        info!("Serialized...");
 
-        println!("forwarded signup list message over WS");
+        info!("forwarded signup list message over WS");
 
         Ok(())
     }
@@ -232,11 +231,11 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for UserSession {
                     send_or_log_err(&ctx.address(), message)
                 }
                 Err(error) => {
-                    eprintln!("Failed to parse client message: {}\n{}", error, text);
+                    error!("Failed to parse client message: {}\n{}", error, text);
                 }
             },
             Ok(ws::Message::Binary(bin)) => {
-                eprintln!("Unexpected binary message: {:?}", bin);
+                error!("Unexpected binary message: {:?}", bin);
             }
             Ok(ws::Message::Close(reason)) => {
                 ctx.close(reason);
@@ -263,16 +262,16 @@ impl Handler<ClientMessage> for UserSession {
 impl Handler<WelcomeMessage> for UserSession {
     type Result = ();
 
+    #[instrument(skip_all, name = "WelcomeMessageHandler")]
     fn handle(&mut self, msg: WelcomeMessage, ctx: &mut Self::Context) -> Self::Result {
         match self.state {
             State::Fresh => {
                 self.state = State::Onboarding { addrs: msg.addrs };
                 self.onboard(ctx, msg.checklist)
-                    .context("onboarding - handling welcome message")
-                    .map_err(|err| eprintln!("ERR: {:#}", err))
-                    .ok();
+                    .context("onboarding")
+                    .log_err();
             }
-            _ => eprintln!("WARN: Already welcomed..."),
+            _ => warn!("Already welcomed..."),
         }
     }
 }

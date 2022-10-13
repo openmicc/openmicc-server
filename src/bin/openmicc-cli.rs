@@ -3,11 +3,14 @@ use std::str::FromStr;
 
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use clap::{Parser, Subcommand};
-use openmicc_server::user_session::{ClientMessage, ServerMessage};
 use rustyline::error::ReadlineError;
 use strum::{EnumDiscriminants, EnumIter, EnumString, IntoEnumIterator};
+use tracing::{error, info};
 use websocket::sync::client::ClientBuilder as WebSocketClientBuilder;
 use websocket::OwnedMessage;
+
+use openmicc_server::user_session::{ClientMessage, ServerMessage};
+use openmicc_server::utils::{LogError, LogOk};
 
 type WebSocketClient = websocket::sync::Client<websocket::stream::sync::TcpStream>;
 type WebSocketReader = websocket::sync::Reader<websocket::stream::sync::TcpStream>;
@@ -48,7 +51,7 @@ impl ClientReadHalf {
                 OwnedMessage::Text(text) => {
                     let msg: ServerMessage = serde_json::from_str(&text)
                         .with_context(|| format!("deserializing ServerMessage: '{}'", text))?;
-                    eprintln!("RECV: {:?}", &msg);
+                    info!("RECV: {:?}", &msg);
                 }
                 OwnedMessage::Binary(_) => todo!(),
                 OwnedMessage::Close(_) => todo!(),
@@ -117,27 +120,33 @@ async fn run_repl_tx(mut client_tx: ClientWriteHalf) -> anyhow::Result<()> {
                 .context("parsing repl command")
                 .with_context(|| anyhow!(ReplCommand::help_message()))
             {
-                Err(err) => eprintln!("{:#}", err),
-                Ok(command) => match handle_command(&mut client_tx, command).await {
-                    Ok(ControlFlow::Continue(..)) => {}
-                    Ok(ControlFlow::Break(..)) => {
-                        break 'repl;
+                Err(err) => error!("{:#}", err),
+                Ok(command) => {
+                    let maybe_control_flow = handle_command(&mut client_tx, command)
+                        .await
+                        .context("handling command")
+                        .ok_log_err();
+
+                    if let Some(control_flow) = maybe_control_flow {
+                        match control_flow {
+                            ControlFlow::Continue(..) => {}
+                            ControlFlow::Break(..) => {
+                                break 'repl;
+                            }
+                        }
                     }
-                    Err(err) => {
-                        eprintln!("{:#}", err);
-                    }
-                },
+                }
             },
             // Err(ReadlineError::Interrupted) => {
-            //     eprintln!("CTRL-C");
+            //     error!("CTRL-C");
             //     break;
             // }
             Err(ReadlineError::Eof) => {
-                eprintln!("CTRL-D");
+                error!("CTRL-D");
                 break;
             }
             Err(err) => {
-                eprintln!("Error: {:?}", err);
+                error!("Error: {:?}", err);
                 break;
             }
         }
@@ -169,7 +178,7 @@ async fn run_repl(client: Client) -> anyhow::Result<()> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    env_logger::init();
+    tracing_subscriber::fmt::init();
 
     let opts = Opts::parse();
 
@@ -180,7 +189,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Repl => run_repl(client).await?,
     }
 
-    println!("exiting.");
+    info!("exiting.");
 
     Ok(())
 }

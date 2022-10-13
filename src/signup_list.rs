@@ -1,15 +1,16 @@
-use actix::prelude::*;
-use anyhow::Context as AnyhowContext;
 use std::collections::HashSet;
 
+use actix::prelude::*;
 use actix::{Actor, Context};
+use anyhow::Context as AnyhowContext;
 use redis::{Client as RedisClient, Commands, Connection as RedisConnection};
 use serde::{Deserialize, Serialize};
+use tracing::info;
 
 use crate::constants::{SIGNUP_LIST, SIGNUP_TOPIC};
 use crate::redis_subscriber::{RedisSubscriber, RedisSubscriberMessage};
 use crate::user_session::{SignupListMessage, UserSession};
-use crate::utils::send_or_log_err;
+use crate::utils::{send_or_log_err, LogError, MyAddr};
 
 #[derive(Clone, Debug, Message)]
 #[rtype(result = "()")]
@@ -34,11 +35,11 @@ impl Handler<RedisMessage> for SignupListActor {
     type Result = ();
 
     fn handle(&mut self, msg: RedisMessage, _ctx: &mut Self::Context) -> Self::Result {
-        println!("handle redis message");
+        info!("handle redis message");
         match msg {
             RedisMessage::Update { topic, content } => {
-                println!("signup received redis update.");
-                println!("{}: {}", topic, content);
+                info!("signup received redis update.");
+                info!("{}: {}", topic, content);
 
                 if topic == SIGNUP_TOPIC {
                     let msg = SignupListMessage::New {
@@ -49,7 +50,7 @@ impl Handler<RedisMessage> for SignupListActor {
                     }
                 }
 
-                println!("signup dispatched messges");
+                info!("signup dispatched messges");
             }
         }
     }
@@ -59,23 +60,23 @@ impl Handler<SubscribeToSignupList> for SignupListActor {
     type Result = anyhow::Result<()>;
 
     fn handle(&mut self, msg: SubscribeToSignupList, _ctx: &mut Self::Context) -> Self::Result {
-        println!("got signup list subscribe request");
+        info!("got signup list subscribe request");
         // Get the current signup list
         let current_list = self.get_list()?;
 
-        println!("got current list: {:?}", &current_list);
+        info!("got current list: {:?}", &current_list);
 
         // Susbcribe the new user
         let SubscribeToSignupList(addr) = msg;
         self.users.insert(addr.clone());
 
-        println!("subscribed user");
+        info!("subscribed user");
 
         // Send the current list to the new user
         let list_msg = SignupListMessage::All { list: current_list };
         send_or_log_err(&addr, list_msg);
 
-        println!("sent list to user");
+        info!("sent list to user");
 
         Ok(())
     }
@@ -98,7 +99,7 @@ pub fn start_signup_list(redis: RedisClient) -> anyhow::Result<Addr<SignupListAc
 /// A snapshot of the current signup list is returned.
 #[derive(Debug, Message)]
 #[rtype(result = "anyhow::Result<()>")]
-pub struct SubscribeToSignupList(pub Addr<UserSession>);
+pub struct SubscribeToSignupList(pub MyAddr<UserSession>);
 
 pub struct SignupListActor {
     /// Resdis client
@@ -106,7 +107,7 @@ pub struct SignupListActor {
     /// Redis connection
     redis: RedisConnection,
     /// Users who are subscribed to the list
-    users: HashSet<Addr<UserSession>>,
+    users: HashSet<MyAddr<UserSession>>,
 }
 
 impl SignupListActor {
@@ -182,7 +183,7 @@ impl Actor for SignupListActor {
     type Context = Context<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
-        println!("Start signup list");
+        info!("Start signup list");
 
         // Register for updates & start subscriber
         let addr = ctx.address();
@@ -194,13 +195,12 @@ impl Actor for SignupListActor {
         subscriber_addr
             .try_send(register_msg)
             .context("failed to register with subscriber")
-            .map_err(|err| eprintln!("ERR: {:?}", err))
-            .ok();
+            .log_err();
 
-        println!("signup list actor start finished");
+        info!("signup list actor start finished");
     }
 
     fn stopped(&mut self, _ctx: &mut Self::Context) {
-        println!("Stop signup list");
+        info!("Stop signup list");
     }
 }
