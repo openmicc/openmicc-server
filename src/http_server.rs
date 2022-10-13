@@ -6,7 +6,7 @@ use actix_web::{
     HttpRequest, HttpResponse, HttpServer,
 };
 use actix_web_actors::ws;
-use tracing::{error, info, instrument};
+use tracing::{info, instrument};
 
 use crate::greeter::Greeter;
 use crate::user_session::UserSession;
@@ -21,8 +21,6 @@ pub struct AppData {
 pub async fn run_http_server(port: u16, app_data: AppData) -> anyhow::Result<()> {
     let addr = format!("0.0.0.0:{}", port);
     info!("Running on {}", &addr);
-
-    error!("Here's an instrumented error!");
 
     HttpServer::new(move || {
         App::new()

@@ -29,8 +29,6 @@ async fn main() -> anyhow::Result<()> {
     init_tracing();
     let opts = Opts::parse();
 
-    error!("Here's an error for you.");
-
     // Start signup list
     let redis = RedisClient::open(opts.redis).context("creating redis client")?;
     let signup_list = start_signup_list(redis).context("starting signup list")?;
