@@ -5,8 +5,6 @@
 
 use std::collections::HashSet;
 use std::convert::TryFrom;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
 
 use actix::dev::ToEnvelope;
 use actix::prelude::*;
@@ -19,17 +17,11 @@ use actix_web::{
     HttpRequest, HttpResponse, HttpServer,
 };
 use actix_web_actors::ws;
-use anyhow::{bail, Context as AnyhowContext};
+use anyhow::Context as AnyhowContext;
 use clap::Parser;
-use futures::{Future, StreamExt};
-use redis::aio::PubSub;
-use redis::{
-    aio::Connection as RedisAsyncConnection, AsyncCommands, Client as RedisClient, Commands,
-    Connection as RedisConnection, ControlFlow, PubSubCommands,
-};
+use futures::StreamExt;
+use redis::{Client as RedisClient, Commands, Connection as RedisConnection};
 use serde::{Deserialize, Serialize};
-use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
 
 // Redis keys/topics
 const SIGNUP_TOPIC: &str = "new_signups";
@@ -318,11 +310,6 @@ impl Actor for SignupListActor {
             .map_err(|err| eprintln!("ERR: {:?}", err))
             .ok();
 
-        // self.subscriber.register(addr);
-        // let cloned_subscriber = self.subscriber.clone();
-        println!("spawning listener");
-        println!("listener spawned");
-
         println!("signup list actor start finished");
     }
 
@@ -589,13 +576,6 @@ struct AppData {
     // subscriber: Arc<RedisSubscriber<UserSession>>,
     signup_list_addr: Addr<SignupListActor>,
 }
-
-// fn create_redis_subscriber<S: ToString>(
-//     redis: RedisClient,
-//     topic: S,
-// ) -> Arc<RedisSubscriber<SignupListActor>> {
-//     Arc::new(RedisSubscriber::new(redis, topic))
-// }
 
 async fn run_http_server(port: u16, app_data: AppData) -> anyhow::Result<()> {
     let addr = format!("0.0.0.0:{}", port);
