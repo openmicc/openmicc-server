@@ -9,12 +9,12 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
         rustPlatform = pkgs.rustPlatform;
-        in {
+      in {
         defaultPackage = rustPlatform.buildRustPackage {
           pname = "openmicc-server";
           version = "0.1.0";
 
-          nativeBuildInputs = with pkgs; [ lld pkgconfig udev ];
+          nativeBuildInputs = with pkgs; [ openssl lld pkgconfig udev ];
 
           cargoLock = { lockFile = ./Cargo.lock; };
 
@@ -26,13 +26,8 @@
           src = ./.;
 
           # build-time deps
-          nativeBuildInputs = (with pkgs; [
-            rustc
-            cargo
-            lld
-            pkgconfig
-            udev
-          ]);
+          nativeBuildInputs =
+            (with pkgs; [ openssl rustc cargo lld pkgconfig udev ]);
         };
       });
 }
