@@ -7,8 +7,8 @@ use tracing::{error, info, info_span, instrument, warn};
 use tracing_actix::ActorInstrument;
 
 use crate::greeter::{AddressBook, Greeter, GreeterMessage, OnboardingChecklist, OnboardingTask};
-use crate::signup_list::user_api::{GetList, SignUp, Subscribe, Unsubscribe};
-use crate::signup_list::{Signup, SignupList, SignupListActor};
+use crate::signup_list::user_api::{GetList, SignMeUp, Subscribe, Unsubscribe};
+use crate::signup_list::{SignupList, SignupListActor, SignupListEntry};
 use crate::utils::{LogError, MyAddr, SendAndCheckResponse, SendAndCheckResult, WrapAddr};
 
 /// Sent from client to sever
@@ -20,7 +20,7 @@ pub enum ClientMessage {
     /// Get the whole current signup list
     GetList,
     /// Sign me up.
-    SignMeUp { name: Signup },
+    SignMeUp { name: SignupListEntry },
     // TODO: ImReady (I'm ready to perform)
 }
 
@@ -45,7 +45,7 @@ pub enum ServerMessage {
     // SignupList(SignupList),
     /// A notification of a new sign-up.
     NewSignup {
-        name: Signup,
+        name: SignupListEntry,
     },
     /// A snapshot of the whole current sign-up list.
     WholeSignupList {
@@ -60,7 +60,7 @@ pub enum ServerMessage {
 #[rtype(result = "anyhow::Result<()>")]
 pub enum SignupListMessage {
     All { list: SignupList },
-    New { new: Signup },
+    New { new: SignupListEntry },
 }
 
 /// Sent from `Greeter` to `UserSession` upon connection
@@ -150,10 +150,10 @@ impl UserSession {
     fn sign_me_up(
         &mut self,
         ctx: &mut <Self as Actor>::Context,
-        name: Signup,
+        name: SignupListEntry,
     ) -> anyhow::Result<()> {
         if let State::Onboarded { addrs } = &self.state {
-            let signup_msg = SignUp(name);
+            let signup_msg = SignMeUp(name);
             let signup_list = addrs.signup_list.clone();
             self.send_and_check_result(ctx, signup_list, signup_msg);
         } else {

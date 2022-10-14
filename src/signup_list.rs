@@ -119,15 +119,12 @@ pub mod user_api {
     /// Add my name to the list
     #[derive(Debug, Message)]
     #[rtype(result = "anyhow::Result<()>")]
-    // TODO rename (too close to Signup)
-    // Maybe `SignupListEntry` and `SignMeUpMessage`?
-    // or just `Signup` and `SignMeUp`.
-    pub struct SignUp(pub Signup);
+    pub struct SignMeUp(pub SignupListEntry);
 
-    impl Handler<SignUp> for SignupListActor {
+    impl Handler<SignMeUp> for SignupListActor {
         type Result = anyhow::Result<()>;
 
-        fn handle(&mut self, msg: SignUp, _ctx: &mut Self::Context) -> Self::Result {
+        fn handle(&mut self, msg: SignMeUp, _ctx: &mut Self::Context) -> Self::Result {
             let signup = msg.0;
             self.publish_signup(signup)
         }
@@ -174,7 +171,7 @@ impl SignupListActor {
     }
 
     #[instrument(skip(self))]
-    fn publish_signup(&mut self, signup: Signup) -> anyhow::Result<()> {
+    fn publish_signup(&mut self, signup: SignupListEntry) -> anyhow::Result<()> {
         // TODO: Publish asynchronously?
         let signup_string = signup.to_string();
 
@@ -204,15 +201,15 @@ impl SignupListActor {
 
 /// An entry on the signup list.
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Signup(String);
+pub struct SignupListEntry(String);
 
-impl ToString for Signup {
+impl ToString for SignupListEntry {
     fn to_string(&self) -> String {
         self.0.clone()
     }
 }
 
-impl From<String> for Signup {
+impl From<String> for SignupListEntry {
     fn from(val: String) -> Self {
         Self(val)
     }
@@ -220,11 +217,11 @@ impl From<String> for Signup {
 
 /// A snapshot of the whole signup list.
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct SignupList(Vec<Signup>);
+pub struct SignupList(Vec<SignupListEntry>);
 
 impl<E, L> From<L> for SignupList
 where
-    E: Into<Signup>,
+    E: Into<SignupListEntry>,
     L: IntoIterator<Item = E>,
 {
     fn from(vals: L) -> Self {
