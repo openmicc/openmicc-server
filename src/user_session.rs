@@ -424,6 +424,10 @@ impl Handler<WelcomeMessage> for UserSession {
                 self.onboard(ctx, msg.checklist)
                     .context("onboarding")
                     .log_err();
+
+                // TODO: Should this be initiated by the client?
+                // Get signup list right after onboarding
+                self.get_signup_list(ctx).log_err();
             }
             _ => warn!("Already welcomed..."),
         }
