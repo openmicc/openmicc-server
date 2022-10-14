@@ -168,7 +168,7 @@ impl SignupListActor {
 
         let tx = || -> anyhow::Result<()> {
             // Publish
-            self.redis.lpush(SIGNUP_LIST, signup_string.clone())?;
+            self.redis.rpush(SIGNUP_LIST, signup_string.clone())?;
             self.redis.publish(SIGNUP_TOPIC, signup_string)?;
 
             Ok(())
