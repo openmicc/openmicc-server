@@ -125,24 +125,26 @@ async fn run_repl_tx(mut client_tx: ClientWriteHalf) -> anyhow::Result<()> {
 
         match readline {
             Ok(line) => {
-                let maybe_command = ReplCommand::parse(&line)
-                    .with_context(|| anyhow!(ReplCommand::help_message()))
-                    .context("parsing repl command")
-                    .ok_log_err();
-
-                if let Some(command) = maybe_command {
-                    let maybe_control_flow = handle_command(&mut client_tx, command)
-                        .await
-                        .context("handling command")
+                if let Some(cmd_res) = ReplCommand::parse(&line) {
+                    let maybe_command = cmd_res
+                        .with_context(|| anyhow!(ReplCommand::help_message()))
+                        .context("parsing repl command")
                         .ok_log_err();
 
-                    if let Some(control_flow) = maybe_control_flow {
-                        match control_flow {
-                            ControlFlow::Continue(..) => {
-                                println!();
-                            }
-                            ControlFlow::Break(..) => {
-                                break 'repl;
+                    if let Some(command) = maybe_command {
+                        let maybe_control_flow = handle_command(&mut client_tx, command)
+                            .await
+                            .context("handling command")
+                            .ok_log_err();
+
+                        if let Some(control_flow) = maybe_control_flow {
+                            match control_flow {
+                                ControlFlow::Continue(..) => {
+                                    println!();
+                                }
+                                ControlFlow::Break(..) => {
+                                    break 'repl;
+                                }
                             }
                         }
                     }
@@ -228,31 +230,37 @@ impl ReplCommand {
     }
 
     /// Parse a string into a command
-    pub fn parse(cmd_str: &str) -> anyhow::Result<Self> {
+    pub fn parse(cmd_str: &str) -> Option<anyhow::Result<Self>> {
         let words: Vec<&str> = cmd_str.split_whitespace().collect();
         if let Some((first, rest)) = words.split_first() {
-            use ReplCommandDiscriminants::*;
-            let discriminant = ReplCommandDiscriminants::from_str(&first)
-                .context("parsing first word in command")?;
-            match discriminant {
-                Exit => match rest.len() {
-                    0 => Ok(ReplCommand::Exit),
-                    _ => bail!("`exit` takes no args"),
-                },
-                SignUp => match rest.split_first() {
-                    Some((name, &[])) => Ok(ReplCommand::SignUp {
-                        name: name.to_string(),
-                    }),
-                    Some(..) => bail!("too many args given to `signup`"),
-                    None => bail!("`signup` requires one arg: `name`"),
-                },
-                List => match rest.len() {
-                    0 => Ok(ReplCommand::List),
-                    _ => bail!("`list` takes no args"),
-                },
-            }
+            // At least one word given
+            Some(Self::parse_inner(first, rest))
         } else {
-            bail!("empty command");
+            // Empty command
+            None
+        }
+    }
+
+    fn parse_inner(first: &str, rest: &[&str]) -> anyhow::Result<Self> {
+        use ReplCommandDiscriminants::*;
+        let discriminant =
+            ReplCommandDiscriminants::from_str(&first).context("parsing first word in command")?;
+        match discriminant {
+            Exit => match rest.len() {
+                0 => Ok(ReplCommand::Exit),
+                _ => bail!("`exit` takes no args"),
+            },
+            SignUp => match rest.split_first() {
+                Some((name, &[])) => Ok(ReplCommand::SignUp {
+                    name: name.to_string(),
+                }),
+                Some(..) => bail!("too many args given to `signup`"),
+                None => bail!("`signup` requires one arg: `name`"),
+            },
+            List => match rest.len() {
+                0 => Ok(ReplCommand::List),
+                _ => bail!("`list` takes no args"),
+            },
         }
     }
 }
