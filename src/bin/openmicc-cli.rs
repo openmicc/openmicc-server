@@ -27,7 +27,6 @@ struct Opts {
 
 #[derive(Subcommand)]
 enum Command {
-    GetList,
     Repl,
 }
 
@@ -197,7 +196,6 @@ async fn main() -> anyhow::Result<()> {
     let client = Client::try_new(&opts.url)?;
 
     match opts.command {
-        Command::GetList => todo!(),
         Command::Repl => run_repl(client).await?,
     }
 
