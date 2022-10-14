@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use actix::prelude::*;
 use actix::{Actor, StreamHandler};
 use actix_web_actors::ws;
@@ -10,6 +12,28 @@ use crate::greeter::{AddressBook, Greeter, GreeterMessage, OnboardingChecklist, 
 use crate::signup_list::user_api::{GetList, SignMeUp, Subscribe, Unsubscribe};
 use crate::signup_list::{SignupList, SignupListActor, SignupListEntry};
 use crate::utils::{LogError, MyAddr, SendAndCheckResponse, SendAndCheckResult, WrapAddr};
+
+type SignupListCounterInner = usize;
+
+#[derive(Clone, Default, Debug, Deserialize, Serialize)]
+pub struct SignupListCounter(SignupListCounterInner);
+
+impl Deref for SignupListCounter {
+    type Target = SignupListCounterInner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl SignupListCounter {
+    /// Increment the counter and return a reference
+    /// to the updated value.
+    pub fn incr(&mut self) -> &Self {
+        self.0 += 1;
+        &*self
+    }
+}
 
 /// Sent from client to sever
 #[derive(Debug, Message, Deserialize, Serialize)]
@@ -24,6 +48,7 @@ pub enum ClientMessage {
     // TODO: ImReady (I'm ready to perform)
 }
 
+// TODO: Delete WelcomeInfo?
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WelcomeInfo {
@@ -38,6 +63,7 @@ pub struct WelcomeInfo {
 #[serde(rename = "camelCase")]
 #[rtype(result = "()")]
 pub enum ServerMessage {
+    // TODO: Delete WelcomeInfo?
     Welcome(WelcomeInfo),
     // TODO: Pop from list (after finishing)
     // TODO: Remove person from list (dropped out early)
@@ -45,7 +71,12 @@ pub enum ServerMessage {
     // SignupList(SignupList),
     /// A notification of a new sign-up.
     NewSignup {
+        /// The new list entry
         name: SignupListEntry,
+        /// Count list updates so that
+        /// clients can tell if they've missed one
+        /// and ask for the whole list
+        counter: SignupListCounter,
     },
     /// A snapshot of the whole current sign-up list.
     WholeSignupList {
@@ -59,8 +90,13 @@ pub enum ServerMessage {
 #[derive(Clone, Debug, Message)]
 #[rtype(result = "anyhow::Result<()>")]
 pub enum SignupListMessage {
-    All { list: SignupList },
-    New { new: SignupListEntry },
+    All {
+        list: SignupList,
+    },
+    New {
+        new: SignupListEntry,
+        counter: SignupListCounter,
+    },
 }
 
 /// Sent from `Greeter` to `UserSession` upon connection
@@ -325,9 +361,9 @@ impl Handler<SignupListMessage> for UserSession {
                 let server_msg = ServerMessage::Welcome(welcome_info);
                 self.send_msg(ctx, server_msg).context("got whole list")?;
             }
-            SignupListMessage::New { new } => {
+            SignupListMessage::New { new, counter } => {
                 // Signup update
-                let server_msg = ServerMessage::NewSignup { name: new };
+                let server_msg = ServerMessage::NewSignup { name: new, counter };
                 self.send_msg(ctx, server_msg).context("got list update")?;
                 warn!("Update has been forwarded to client");
             }

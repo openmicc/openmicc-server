@@ -8,9 +8,9 @@ use actix::prelude::*;
 use actix::{Actor, ActorFutureExt, Context, StreamHandler};
 use futures::StreamExt;
 use redis::Client as RedisClient;
-use tracing::{info, instrument};
+use tracing::{info, info_span, instrument, warn};
+use tracing_actix::ActorInstrument;
 
-use crate::signup_list::RedisMessage;
 use crate::utils::{LogOk, MyAddr, SendAndCheckResponse};
 
 #[derive(Clone, Message)]
@@ -26,6 +26,26 @@ impl<A: Actor> Debug for RedisSubscriberMessage<A> {
             Self::Register(arg0) => f.debug_tuple("Register").field(arg0).finish(),
             Self::Unregister(arg0) => f.debug_tuple("Unregister").field(arg0).finish(),
         }
+    }
+}
+
+#[derive(Clone, Debug, Message)]
+#[rtype(result = "()")]
+pub enum RedisMessage {
+    Update { topic: String, content: String },
+}
+
+impl TryFrom<redis::Msg> for RedisMessage {
+    type Error = anyhow::Error;
+
+    #[instrument]
+    fn try_from(msg: redis::Msg) -> Result<Self, Self::Error> {
+        let topic = msg.get_channel_name().to_string();
+        let content: String = msg.get_payload()?;
+
+        let converted = Self::Update { topic, content };
+
+        Ok(converted)
     }
 }
 
@@ -101,44 +121,42 @@ where
 {
     type Context = Context<Self>;
 
-    #[instrument(skip(ctx))]
     fn started(&mut self, ctx: &mut Self::Context) {
         info!("starting RedisSubscriber");
 
         let topic = self.topic.clone();
         let client = self.client.clone();
 
-        let block = async move {
+        let stream_res_fut = async move {
             let redis = client.get_async_connection().await?;
             let mut pubsub = redis.into_pubsub();
             pubsub.subscribe(&topic).await?;
-
+            // Stream of redis::Msg
             let stream = pubsub.into_on_message();
+            // Stream of Option<RedisMessage>
             let mapped =
                 stream.filter_map(|msg| async { RedisMessage::try_from(msg).ok_log_err() });
-
-            Ok(mapped)
+            Ok::<_, anyhow::Error>(mapped)
         };
 
-        let logged = block.into_actor(self).map(map_stream);
+        // Once the stream is created,
+        // add it to the current context.
+        let span = info_span!("Following up on RedisMessage stream creation");
+        let do_later =
+            stream_res_fut
+                .into_actor(self)
+                .actor_instrument(span)
+                .map(|stream_res, _act, ctx| {
+                    stream_res.ok_log_err().map(|stream| ctx.add_stream(stream));
+                });
 
-        ctx.spawn(logged);
+        ctx.spawn(do_later);
     }
 
     #[instrument(skip(_ctx))]
     fn stopped(&mut self, _ctx: &mut Self::Context) {
         info!("stopping RedisSubscriber");
     }
-}
-
-fn map_stream<A, S>(res: anyhow::Result<S>, _act: &mut A, ctx: &mut A::Context)
-where
-    A: Actor + StreamHandler<RedisMessage>,
-    A::Context: AsyncContext<A>,
-    // A::Context: ToEnvelope<A, RedisMessage>,
-    S: Stream<Item = RedisMessage> + 'static,
-{
-    res.ok_log_err().map(|stream| ctx.add_stream(stream));
 }
 
 impl<A> Handler<RedisSubscriberMessage<A>> for RedisSubscriber<A>

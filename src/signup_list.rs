@@ -8,45 +8,32 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, instrument, warn};
 
 use crate::constants::{SIGNUP_LIST, SIGNUP_TOPIC};
-use crate::redis_subscriber::{RedisSubscriber, RedisSubscriberMessage};
-use crate::user_session::{SignupListMessage, UserSession};
+use crate::redis_subscriber::{RedisMessage, RedisSubscriber, RedisSubscriberMessage};
+use crate::user_session::{SignupListCounter, SignupListMessage, UserSession};
 use crate::utils::{LogError, MyAddr, SendAndCheckResult, WrapAddr};
-
-#[derive(Clone, Debug, Message)]
-#[rtype(result = "()")]
-pub enum RedisMessage {
-    Update { topic: String, content: String },
-}
-
-impl TryFrom<redis::Msg> for RedisMessage {
-    type Error = anyhow::Error;
-
-    #[instrument]
-    fn try_from(msg: redis::Msg) -> Result<Self, Self::Error> {
-        let topic = msg.get_channel_name().to_string();
-        let content: String = msg.get_payload()?;
-
-        let converted = Self::Update { topic, content };
-
-        Ok(converted)
-    }
-}
 
 impl Handler<RedisMessage> for SignupListActor {
     type Result = ();
 
-    #[instrument(skip(self, ctx), name = "RedisMessageHandler")]
+    #[instrument(skip(self, ctx), name = "CountedRedisMessageHandler")]
     fn handle(&mut self, msg: RedisMessage, ctx: &mut Self::Context) -> Self::Result {
         info!("handle redis message");
         match msg {
-            RedisMessage::Update { topic, content } => {
+            RedisMessage::Update {
+                topic,
+                content,
+                // counter,
+            } => {
                 info!("signup received redis update.");
                 info!("{}: {}", topic, content);
+
+                let counter = self.update_counter.incr().clone();
 
                 // Should be, but just double checking
                 if topic == SIGNUP_TOPIC {
                     let msg = SignupListMessage::New {
                         new: content.into(),
+                        counter,
                     };
                     let users = self.users.clone();
                     for user in users {
@@ -154,6 +141,9 @@ pub struct SignupListActor {
     redis: RedisConnection,
     /// Users who are subscribed to the list
     users: HashSet<MyAddr<UserSession>>,
+    /// Enumerate updates so that clients
+    /// can tell whether they've missed one.
+    update_counter: SignupListCounter,
 }
 
 impl SignupListActor {
@@ -165,6 +155,7 @@ impl SignupListActor {
             client,
             redis,
             users: Default::default(),
+            update_counter: Default::default(),
         };
 
         Ok(new)
