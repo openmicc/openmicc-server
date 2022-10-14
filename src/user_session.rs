@@ -62,7 +62,7 @@ pub enum SignupListMessage {
 }
 
 /// Sent from `Greeter` to `UserSession` upon connection
-#[derive(Message)]
+#[derive(Debug, Message)]
 #[rtype(result = "()")]
 pub struct WelcomeMessage {
     pub addrs: AddressBook,
@@ -272,7 +272,7 @@ impl Actor for UserSession {
         info!("started");
 
         // Say hello to the greeter
-        let addr = ctx.address();
+        let addr = ctx.address().wrap();
         let hello_msg = GreeterMessage::Hello(addr);
         let greeter = self.greeter_addr.clone();
         self.send_and_check_response(ctx, greeter, hello_msg);

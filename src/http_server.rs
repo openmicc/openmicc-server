@@ -1,4 +1,3 @@
-use actix::prelude::*;
 use actix_web::error::Error as ActixError;
 use actix_web::App;
 use actix_web::{
@@ -10,11 +9,11 @@ use tracing::{info, instrument};
 
 use crate::greeter::Greeter;
 use crate::user_session::UserSession;
-use crate::utils::WrapAddr;
+use crate::utils::MyAddr;
 
 #[derive(Clone)]
 pub struct AppData {
-    pub greeter_addr: Addr<Greeter>,
+    pub greeter_addr: MyAddr<Greeter>,
 }
 
 #[instrument(skip(app_data))]
@@ -58,7 +57,8 @@ async fn ws_index(
     stream: Payload,
 ) -> Result<HttpResponse, ActixError> {
     info!("ws_index");
-    let actor = UserSession::new(data.greeter_addr.clone().wrap());
+    let addr = data.greeter_addr.clone();
+    let actor = UserSession::new(addr);
 
     ws::start(actor, &request, stream)
 

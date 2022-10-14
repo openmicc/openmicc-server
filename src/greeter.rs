@@ -1,21 +1,19 @@
 use std::fmt::Debug;
 
-use actix::{Actor, Addr, AsyncContext, Context, Handler, Message, WrapFuture};
-use anyhow::Context as AnyhowContext;
-use futures::FutureExt;
+use actix::{Actor, Context, Handler, Message};
 use tracing::{info, instrument};
 
 use crate::{
     signup_list::SignupListActor,
     user_session::{UserSession, WelcomeMessage},
-    utils::{LogError, MyAddr},
+    utils::{MyAddr, SendAndCheckResponse, WrapAddr},
 };
 
 #[derive(Debug, Clone, Message)]
 #[rtype(result = "()")]
 pub enum GreeterMessage {
     /// The user sends their address to the greeter upon arrival
-    Hello(Addr<UserSession>),
+    Hello(MyAddr<UserSession>),
 }
 
 #[derive(Clone, Debug)]
@@ -93,19 +91,14 @@ impl Handler<GreeterMessage> for Greeter {
                 let checklist = OnboardingChecklist::new();
 
                 let welcome_info = WelcomeMessage { addrs, checklist };
-                let send_fut = user.send(welcome_info).map(|res| {
-                    res.context("sending welcome info to user").log_err();
-                });
-
-                let actor_fut = send_fut.into_actor(self);
-                ctx.spawn(actor_fut);
+                self.send_and_check_response(ctx, user, welcome_info);
             }
         }
     }
 }
 
 #[instrument]
-pub fn start_greeter(addrs: AddressBook) -> Addr<Greeter> {
+pub fn start_greeter(addrs: AddressBook) -> MyAddr<Greeter> {
     let greeter = Greeter::new(addrs);
-    greeter.start()
+    greeter.start().wrap()
 }
