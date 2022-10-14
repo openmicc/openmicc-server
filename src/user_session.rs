@@ -44,7 +44,9 @@ pub enum ServerMessage {
     // The whole current sign-up list.
     // SignupList(SignupList),
     /// A notification of a new sign-up.
-    NewSignup(Signup),
+    NewSignup {
+        name: Signup,
+    },
     /// A snapshot of the whole current sign-up list.
     WholeSignupList {
         list: SignupList,
@@ -319,7 +321,7 @@ impl Handler<SignupListMessage> for UserSession {
             }
             SignupListMessage::New { new } => {
                 // Signup update
-                let server_msg = ServerMessage::NewSignup(new);
+                let server_msg = ServerMessage::NewSignup { name: new };
                 self.send_msg(ctx, server_msg).context("got list update")?;
                 warn!("Update has been forwarded to client");
             }
