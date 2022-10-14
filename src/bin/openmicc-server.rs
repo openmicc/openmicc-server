@@ -7,6 +7,7 @@ use openmicc_server::{
     utils::WrapAddr,
 };
 use redis::Client as RedisClient;
+use tracing::info;
 
 #[derive(Parser)]
 struct Opts {
@@ -14,7 +15,7 @@ struct Opts {
     port: u16,
 
     /// Redis connection string
-    #[arg(default_value = "redis://127.0.0.1:6379")]
+    #[arg(default_value = "redis://127.0.0.1:6379", env = "REDIS_URL")]
     redis: String,
 }
 
@@ -29,6 +30,7 @@ async fn main() -> anyhow::Result<()> {
     let opts = Opts::parse();
 
     // Start signup list
+    info!("Connecting to redis at {}", opts.redis);
     let redis = RedisClient::open(opts.redis).context("creating redis client")?;
     let signup_list = start_signup_list(redis).context("starting signup list")?;
     let addr = signup_list.wrap();
