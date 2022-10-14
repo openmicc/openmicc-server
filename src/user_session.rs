@@ -7,9 +7,9 @@ use tracing::{error, info, info_span, instrument, warn};
 use tracing_actix::ActorInstrument;
 
 use crate::greeter::{AddressBook, Greeter, GreeterMessage, OnboardingChecklist, OnboardingTask};
-use crate::signup_list::user_api::GetList;
-use crate::signup_list::{Signup, SignupList, SignupListActor, SubscribeToSignupList};
-use crate::utils::{LogError, MyAddr, SendAndCheckResponse, SendAndCheckResult, WrapAddr};
+use crate::signup_list::user_api::{GetList, Subscribe, Unsubscribe};
+use crate::signup_list::{Signup, SignupList, SignupListActor};
+use crate::utils::{LogError, MyAddr, SendAndCheckResponse, WrapAddr};
 
 /// Sent from client to sever
 #[derive(Debug, Message, Deserialize, Serialize)]
@@ -170,11 +170,12 @@ impl UserSession {
         ctx: &mut <Self as Actor>::Context,
     ) -> anyhow::Result<()> {
         if let State::Onboarding { addrs } = &self.state {
-            let my_addr = ctx.address();
-            let subscribe_msg = SubscribeToSignupList(my_addr.wrap());
+            let my_addr = ctx.address().wrap();
+            let subscribe_msg = Subscribe(my_addr);
             let signup_list = addrs.signup_list.clone();
-            self.send_and_check_result(ctx, signup_list, subscribe_msg)
+            self.send_and_check_response(ctx, signup_list, subscribe_msg);
         } else {
+            // TODO: Remove this unnecessary restriction by refactoring state?
             bail!("can only subscribe to signup list during onboarding");
         }
 
@@ -186,30 +187,17 @@ impl UserSession {
         &mut self,
         ctx: &mut <Self as Actor>::Context,
     ) -> anyhow::Result<()> {
-        if let State::Onboarding { addrs } = &self.state {
-            // TODO: UNSUBSCRIBE
-            let my_addr = ctx.address();
-            let subscribe_msg = SubscribeToSignupList(my_addr.wrap());
+        if let State::Onboarded { addrs } = &self.state {
+            let my_addr = ctx.address().wrap();
+            let unsubscribe_msg = Unsubscribe(my_addr);
             let signup_list = addrs.signup_list.clone();
-            self.send_and_check_result(ctx, signup_list, subscribe_msg)
+            self.send_and_check_response(ctx, signup_list, unsubscribe_msg);
         } else {
-            bail!("can only subscribe to signup list during onboarding");
+            // TODO: Remove this unnecessary restriction by refactoring state?
+            bail!("can only unsubscribe to signup list after onboarding");
         }
 
         Ok(())
-    }
-
-    #[instrument(skip(ctx))]
-    fn send_unsubscribe_request(
-        &self,
-        ctx: &<Self as Actor>::Context,
-        signup_list: MyAddr<SignupListActor>,
-    ) -> anyhow::Result<()> {
-        // TODO
-        todo!()
-        // let x = 2;
-        // let msg = SignupListMessage::
-        // signup_list.send
     }
 
     #[instrument(skip(ctx))]
@@ -290,10 +278,11 @@ impl Actor for UserSession {
 
     #[instrument(skip(ctx))]
     fn stopped(&mut self, ctx: &mut Self::Context) {
+        self.unsubscribe_from_signup_list(ctx)
+            .context("unsubscribing from signup list")
+            .log_err();
+
         info!("stopped");
-        // TODO
-        todo!()
-        // self.signup_feed.unregister(ctx.address());
     }
 }
 

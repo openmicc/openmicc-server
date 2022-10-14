@@ -62,33 +62,6 @@ impl Handler<RedisMessage> for SignupListActor {
     }
 }
 
-impl Handler<SubscribeToSignupList> for SignupListActor {
-    type Result = anyhow::Result<()>;
-
-    #[instrument(skip(self, ctx), name = "SubscribeToSignupListHandler")]
-    fn handle(&mut self, msg: SubscribeToSignupList, ctx: &mut Self::Context) -> Self::Result {
-        info!("got signup list subscribe request");
-        // Get the current signup list
-        let current_list = self.get_list()?;
-
-        info!("got current list: {:?}", &current_list);
-
-        // Susbcribe the new user
-        let SubscribeToSignupList(addr) = msg;
-        self.users.insert(addr.clone());
-
-        info!("subscribed user");
-
-        // Send the current list to the new user
-        let list_msg = SignupListMessage::All { list: current_list };
-        self.send_and_check_result(ctx, addr, list_msg);
-
-        info!("sent list to user");
-
-        Ok(())
-    }
-}
-
 pub fn start_signup_list(redis: RedisClient) -> anyhow::Result<Addr<SignupListActor>> {
     // TODO: actors should be able to reconnect to redis
     // (or just die & restart would be fine)
@@ -102,14 +75,6 @@ pub fn start_signup_list(redis: RedisClient) -> anyhow::Result<Addr<SignupListAc
 //
 //
 
-// TODO remove in favor of `user_api`
-/// Sent from UserSession to SignupListActor
-/// to receive updates about the signup list.
-/// A snapshot of the current signup list is returned.
-#[derive(Debug, Message)]
-#[rtype(result = "anyhow::Result<()>")]
-pub struct SubscribeToSignupList(pub MyAddr<UserSession>);
-
 /// Signup list API for users
 pub mod user_api {
     use super::*;
@@ -117,13 +82,39 @@ pub mod user_api {
 
     /// Subscribe to list updates
     #[derive(Debug, Message)]
-    #[rtype(result = "anyhow::Result<()>")]
+    #[rtype(result = "()")]
     pub struct Subscribe(pub MyAddr<UserSession>);
+
+    impl Handler<Subscribe> for SignupListActor {
+        type Result = ();
+
+        #[instrument(skip(self, _ctx))]
+        fn handle(&mut self, msg: Subscribe, _ctx: &mut Self::Context) -> Self::Result {
+            let addr = msg.0;
+            let is_new = self.users.insert(addr.clone());
+            if !is_new {
+                warn!("UserSession w/ addr {:?} is already subscribed", addr);
+            }
+        }
+    }
 
     /// Unsubscribe from list updates
     #[derive(Debug, Message)]
-    #[rtype(result = "anyhow::Result<()>")]
-    pub struct Unubscribe(pub MyAddr<UserSession>);
+    #[rtype(result = "()")]
+    pub struct Unsubscribe(pub MyAddr<UserSession>);
+
+    impl Handler<Unsubscribe> for SignupListActor {
+        type Result = ();
+
+        #[instrument(skip(self, _ctx))]
+        fn handle(&mut self, msg: Unsubscribe, _ctx: &mut Self::Context) -> Self::Result {
+            let addr = msg.0;
+            let was_present = self.users.remove(&addr);
+            if !was_present {
+                warn!("UserSession w/ addr {:?} was not subscribed", addr);
+            }
+        }
+    }
 
     /// Add my name to the list
     #[derive(Debug, Message)]
