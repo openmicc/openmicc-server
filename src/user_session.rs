@@ -48,14 +48,6 @@ pub enum ClientMessage {
     // TODO: ImReady (I'm ready to perform)
 }
 
-// TODO: Delete WelcomeInfo?
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WelcomeInfo {
-    /// Current signup list
-    signup_list: SignupList,
-}
-
 /// Info sent to the client upon connecting to the server
 /// Sent from server to client
 #[derive(Debug, Message, Deserialize, Serialize)]
@@ -63,8 +55,6 @@ pub struct WelcomeInfo {
 #[serde(rename = "camelCase")]
 #[rtype(result = "()")]
 pub enum ServerMessage {
-    // TODO: Delete WelcomeInfo?
-    Welcome(WelcomeInfo),
     // TODO: Pop from list (after finishing)
     // TODO: Remove person from list (dropped out early)
     // The whole current sign-up list.
@@ -79,9 +69,7 @@ pub enum ServerMessage {
         counter: SignupListCounter,
     },
     /// A snapshot of the whole current sign-up list.
-    WholeSignupList {
-        list: SignupList,
-    },
+    WholeSignupList { list: SignupList },
     // TODO: AreYouReady (ready to perform?)
 }
 
@@ -355,10 +343,7 @@ impl Handler<SignupListMessage> for UserSession {
         match msg {
             SignupListMessage::All { list } => {
                 // WelcomeInfo
-                let welcome_info = WelcomeInfo { signup_list: list };
-                // TODO: This is a bit confusing that we're sending a
-                // `ServerMessage::Welcome` in the `Welcomed` state.
-                let server_msg = ServerMessage::Welcome(welcome_info);
+                let server_msg = ServerMessage::WholeSignupList { list };
                 self.send_msg(ctx, server_msg).context("got whole list")?;
             }
             SignupListMessage::New { new, counter } => {

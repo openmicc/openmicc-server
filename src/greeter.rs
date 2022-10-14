@@ -87,11 +87,9 @@ impl Handler<GreeterMessage> for Greeter {
         match msg {
             GreeterMessage::Hello(user) => {
                 let addrs = self.addrs.clone();
-
                 let checklist = OnboardingChecklist::new();
-
-                let welcome_info = WelcomeMessage { addrs, checklist };
-                self.send_and_check_response(ctx, user, welcome_info);
+                let welcome_msg = WelcomeMessage { addrs, checklist };
+                self.send_and_check_response(ctx, user, welcome_msg);
             }
         }
     }
