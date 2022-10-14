@@ -119,7 +119,19 @@ pub mod user_api {
     /// Add my name to the list
     #[derive(Debug, Message)]
     #[rtype(result = "anyhow::Result<()>")]
-    pub struct SignUp(pub String);
+    // TODO rename (too close to Signup)
+    // Maybe `SignupListEntry` and `SignMeUpMessage`?
+    // or just `Signup` and `SignMeUp`.
+    pub struct SignUp(pub Signup);
+
+    impl Handler<SignUp> for SignupListActor {
+        type Result = anyhow::Result<()>;
+
+        fn handle(&mut self, msg: SignUp, _ctx: &mut Self::Context) -> Self::Result {
+            let signup = msg.0;
+            self.publish_signup(signup)
+        }
+    }
 
     /// Get a snapshot of the current list
     #[derive(Debug, Message)]
@@ -163,6 +175,7 @@ impl SignupListActor {
 
     #[instrument(skip(self))]
     fn publish_signup(&mut self, signup: Signup) -> anyhow::Result<()> {
+        // TODO: Publish asynchronously?
         let signup_string = signup.to_string();
 
         let tx = || -> anyhow::Result<()> {

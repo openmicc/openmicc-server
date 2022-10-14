@@ -7,9 +7,9 @@ use tracing::{error, info, info_span, instrument, warn};
 use tracing_actix::ActorInstrument;
 
 use crate::greeter::{AddressBook, Greeter, GreeterMessage, OnboardingChecklist, OnboardingTask};
-use crate::signup_list::user_api::{GetList, Subscribe, Unsubscribe};
+use crate::signup_list::user_api::{GetList, SignUp, Subscribe, Unsubscribe};
 use crate::signup_list::{Signup, SignupList, SignupListActor};
-use crate::utils::{LogError, MyAddr, SendAndCheckResponse, WrapAddr};
+use crate::utils::{LogError, MyAddr, SendAndCheckResponse, SendAndCheckResult, WrapAddr};
 
 /// Sent from client to sever
 #[derive(Debug, Message, Deserialize, Serialize)]
@@ -142,6 +142,23 @@ impl UserSession {
             .map(|res, _, _| res.log_err());
 
         ctx.spawn(do_later);
+
+        Ok(())
+    }
+
+    #[instrument(skip(ctx))]
+    fn sign_me_up(
+        &mut self,
+        ctx: &mut <Self as Actor>::Context,
+        name: Signup,
+    ) -> anyhow::Result<()> {
+        if let State::Onboarded { addrs } = &self.state {
+            let signup_msg = SignUp(name);
+            let signup_list = addrs.signup_list.clone();
+            self.send_and_check_result(ctx, signup_list, signup_msg);
+        } else {
+            bail!("can only sign up after onboarding");
+        }
 
         Ok(())
     }
@@ -364,8 +381,7 @@ impl Handler<ClientMessage> for UserSession {
     fn handle(&mut self, msg: ClientMessage, ctx: &mut Self::Context) -> Self::Result {
         match msg {
             ClientMessage::SignMeUp { name } => {
-                // TODO send message to signup list
-                todo!()
+                self.sign_me_up(ctx, name).context("signing up").log_err();
             }
             ClientMessage::GetList => {
                 self.get_signup_list(ctx)

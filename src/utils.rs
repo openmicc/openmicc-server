@@ -37,6 +37,7 @@ where
         M: std::fmt::Debug + Message<Result = ()> + Send + 'static,
         M::Result: std::fmt::Debug + Send,
         Dst: Handler<M>;
+    // TODO: Are any of these trait bounds redundant? ^
 }
 
 impl<A: Actor> SendAndCheckResponse for A
@@ -92,6 +93,7 @@ where
         M::Result: std::fmt::Debug + Send,
         Result<(), E>: MessageResponse<Dst, M> + AnyhowContext<(), E>,
         Dst: Handler<M>;
+    // TODO: Are any of these trait bounds redundant? ^
 }
 
 impl<A: Actor> SendAndCheckResult for A
