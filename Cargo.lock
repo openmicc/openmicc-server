@@ -1381,8 +1381,8 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "tracing-actix",
  "tracing-subscriber",
- "uuid",
  "websocket",
 ]
 
@@ -2355,6 +2355,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-actix"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c817336e87c6e0c86d1fc220be24ebfb18ad3f3a14d80c0ca8bdba9f3ea261e7"
+dependencies = [
+ "actix",
+ "futures 0.3.24",
+ "pin-project-lite",
+ "tracing",
+]
+
+[[package]]
 name = "tracing-attributes"
 version = "0.1.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2487,16 +2499,6 @@ name = "utf8parse"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "936e4b492acfd135421d8dca4b1aa80a7bfc26e702ef3af710e0752684df5372"
-
-[[package]]
-name = "uuid"
-version = "1.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "feb41e78f93363bb2df8b0e86a2ca30eed7806ea16ea0c790d757cf93f79be83"
-dependencies = [
- "getrandom",
- "rand 0.8.5",
-]
 
 [[package]]
 name = "valuable"

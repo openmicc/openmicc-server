@@ -10,7 +10,7 @@ use websocket::sync::client::ClientBuilder as WebSocketClientBuilder;
 use websocket::OwnedMessage;
 
 use openmicc_server::user_session::{ClientMessage, ServerMessage};
-use openmicc_server::utils::{LogError, LogOk};
+use openmicc_server::utils::LogOk;
 
 type WebSocketClient = websocket::sync::Client<websocket::stream::sync::TcpStream>;
 type WebSocketReader = websocket::sync::Reader<websocket::stream::sync::TcpStream>;
@@ -51,6 +51,7 @@ impl ClientReadHalf {
                 OwnedMessage::Text(text) => {
                     let msg: ServerMessage = serde_json::from_str(&text)
                         .with_context(|| format!("deserializing ServerMessage: '{}'", text))?;
+                    // Print incoming messages
                     info!("RECV: {:?}", &msg);
                 }
                 OwnedMessage::Binary(_) => todo!(),
@@ -86,6 +87,13 @@ impl ClientWriteHalf {
 
         Ok(())
     }
+
+    pub async fn get_list(&mut self) -> anyhow::Result<()> {
+        let msg = ClientMessage::GetList;
+        self.send(msg)?;
+
+        Ok(())
+    }
 }
 
 struct ClientWriteHalf {
@@ -116,12 +124,13 @@ async fn run_repl_tx(mut client_tx: ClientWriteHalf) -> anyhow::Result<()> {
         let readline = repl.readline("> ");
 
         match readline {
-            Ok(line) => match ReplCommand::parse(&line)
-                .context("parsing repl command")
-                .with_context(|| anyhow!(ReplCommand::help_message()))
-            {
-                Err(err) => error!("{:#}", err),
-                Ok(command) => {
+            Ok(line) => {
+                let maybe_command = ReplCommand::parse(&line)
+                    .with_context(|| anyhow!(ReplCommand::help_message()))
+                    .context("parsing repl command")
+                    .ok_log_err();
+
+                if let Some(command) = maybe_command {
                     let maybe_control_flow = handle_command(&mut client_tx, command)
                         .await
                         .context("handling command")
@@ -129,14 +138,16 @@ async fn run_repl_tx(mut client_tx: ClientWriteHalf) -> anyhow::Result<()> {
 
                     if let Some(control_flow) = maybe_control_flow {
                         match control_flow {
-                            ControlFlow::Continue(..) => {}
+                            ControlFlow::Continue(..) => {
+                                println!();
+                            }
                             ControlFlow::Break(..) => {
                                 break 'repl;
                             }
                         }
                     }
                 }
-            },
+            }
             // Err(ReadlineError::Interrupted) => {
             //     error!("CTRL-C");
             //     break;
@@ -150,7 +161,6 @@ async fn run_repl_tx(mut client_tx: ClientWriteHalf) -> anyhow::Result<()> {
                 break;
             }
         }
-        println!();
     }
 
     Ok(())
@@ -202,6 +212,8 @@ enum ReplCommand {
     Exit,
     /// Put my name on the list.
     SignUp { name: String },
+    /// Get the current signup list
+    List,
 }
 
 impl ReplCommand {
@@ -234,6 +246,10 @@ impl ReplCommand {
                     Some(..) => bail!("too many args given to `signup`"),
                     None => bail!("`signup` requires one arg: `name`"),
                 },
+                List => match rest.len() {
+                    0 => Ok(ReplCommand::List),
+                    _ => bail!("`list` takes no args"),
+                },
             }
         } else {
             bail!("empty command");
@@ -248,7 +264,11 @@ async fn handle_command(
     let res = match cmd {
         ReplCommand::Exit => ControlFlow::Break(()),
         ReplCommand::SignUp { name } => {
-            client.signup(&name).await?;
+            client.signup(&name).await.context("signing up")?;
+            ControlFlow::Continue(())
+        }
+        ReplCommand::List => {
+            client.get_list().await.context("getting list")?;
             ControlFlow::Continue(())
         }
     };

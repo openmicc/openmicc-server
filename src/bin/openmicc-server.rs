@@ -7,7 +7,6 @@ use openmicc_server::{
     utils::WrapAddr,
 };
 use redis::Client as RedisClient;
-use tracing::error;
 
 #[derive(Parser)]
 struct Opts {

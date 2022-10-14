@@ -3,11 +3,13 @@ use actix::{Actor, StreamHandler};
 use actix_web_actors::ws;
 use anyhow::{bail, Context as AnyhowContext};
 use serde::{Deserialize, Serialize};
-use tracing::{error, info, instrument, warn};
+use tracing::{error, info, info_span, instrument, warn};
+use tracing_actix::ActorInstrument;
 
 use crate::greeter::{AddressBook, Greeter, GreeterMessage, OnboardingChecklist, OnboardingTask};
-use crate::signup_list::{Signup, SignupList, SubscribeToSignupList};
-use crate::utils::{send_or_log_err, LogError, MyAddr, WrapAddr};
+use crate::signup_list::user_api::GetList;
+use crate::signup_list::{Signup, SignupList, SignupListActor, SubscribeToSignupList};
+use crate::utils::{LogError, MyAddr, SendAndCheckResponse, SendAndCheckResult, WrapAddr};
 
 /// Sent from client to sever
 #[derive(Debug, Message, Deserialize, Serialize)]
@@ -15,6 +17,8 @@ use crate::utils::{send_or_log_err, LogError, MyAddr, WrapAddr};
 #[serde(rename_all = "camelCase")]
 #[rtype(result = "()")]
 pub enum ClientMessage {
+    /// Get the whole current signup list
+    GetList,
     /// Sign me up.
     SignMeUp { name: Signup },
     // TODO: ImReady (I'm ready to perform)
@@ -41,6 +45,10 @@ pub enum ServerMessage {
     // SignupList(SignupList),
     /// A notification of a new sign-up.
     NewSignup(Signup),
+    /// A snapshot of the whole current sign-up list.
+    WholeSignupList {
+        list: SignupList,
+    },
     // TODO: AreYouReady (ready to perform?)
 }
 
@@ -99,11 +107,71 @@ impl UserSession {
     }
 
     #[instrument(skip(ctx))]
-    fn subscribe_to_signup_list(&self, ctx: &<Self as Actor>::Context) -> anyhow::Result<()> {
+    fn get_signup_list_inner(
+        &self,
+        ctx: &mut <Self as Actor>::Context,
+        dest: MyAddr<SignupListActor>,
+    ) -> anyhow::Result<()> {
+        let list_res_fut = async move {
+            let current_list = dest
+                .send(GetList)
+                .await
+                .context("mailbox error")?
+                .context("getting signup list")?;
+
+            info!("Current signup list: {:?}", current_list);
+
+            Ok(current_list)
+        };
+
+        let span = info_span!("UserSession handling reply from SignupListActor");
+        let actor_fut = list_res_fut.into_actor(self).actor_instrument(span);
+
+        let do_later = actor_fut
+            .map(|list_res: anyhow::Result<SignupList>, act, ctx| {
+                info!("Now is later. Result = {:?}", list_res);
+                let msg = ServerMessage::WholeSignupList { list: list_res? };
+                act.send_msg(ctx, msg)
+                    .context("sending message to client")?;
+                info!("message has been sent.");
+
+                Ok(())
+            })
+            .map(|res, _, _| res.log_err());
+
+        ctx.spawn(do_later);
+
+        Ok(())
+    }
+
+    #[instrument(skip(ctx))]
+    fn get_signup_list(&self, ctx: &mut <Self as Actor>::Context) -> anyhow::Result<()> {
+        match &self.state {
+            State::Fresh => bail!("cannot get signup list before onboarding"),
+            // TODO: refactor state
+            State::Onboarding { addrs } => {
+                let dest = addrs.signup_list.clone();
+                self.get_signup_list_inner(ctx, dest)?;
+            }
+            State::Onboarded { addrs } => {
+                let dest = addrs.signup_list.clone();
+                self.get_signup_list_inner(ctx, dest)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    #[instrument(skip(ctx))]
+    fn subscribe_to_signup_list(
+        &mut self,
+        ctx: &mut <Self as Actor>::Context,
+    ) -> anyhow::Result<()> {
         if let State::Onboarding { addrs } = &self.state {
             let my_addr = ctx.address();
             let subscribe_msg = SubscribeToSignupList(my_addr.wrap());
-            send_or_log_err(&addrs.signup_list, subscribe_msg);
+            let signup_list = addrs.signup_list.clone();
+            self.send_and_check_result(ctx, signup_list, subscribe_msg)
         } else {
             bail!("can only subscribe to signup list during onboarding");
         }
@@ -112,9 +180,40 @@ impl UserSession {
     }
 
     #[instrument(skip(ctx))]
-    fn do_onboarding_task(
+    fn unsubscribe_from_signup_list(
+        &mut self,
+        ctx: &mut <Self as Actor>::Context,
+    ) -> anyhow::Result<()> {
+        if let State::Onboarding { addrs } = &self.state {
+            // TODO: UNSUBSCRIBE
+            let my_addr = ctx.address();
+            let subscribe_msg = SubscribeToSignupList(my_addr.wrap());
+            let signup_list = addrs.signup_list.clone();
+            self.send_and_check_result(ctx, signup_list, subscribe_msg)
+        } else {
+            bail!("can only subscribe to signup list during onboarding");
+        }
+
+        Ok(())
+    }
+
+    #[instrument(skip(ctx))]
+    fn send_unsubscribe_request(
         &self,
         ctx: &<Self as Actor>::Context,
+        signup_list: MyAddr<SignupListActor>,
+    ) -> anyhow::Result<()> {
+        // TODO
+        todo!()
+        // let x = 2;
+        // let msg = SignupListMessage::
+        // signup_list.send
+    }
+
+    #[instrument(skip(ctx))]
+    fn do_onboarding_task(
+        &mut self,
+        ctx: &mut <Self as Actor>::Context,
         task: OnboardingTask,
     ) -> anyhow::Result<()> {
         match task {
@@ -125,11 +224,12 @@ impl UserSession {
     #[instrument(skip(ctx))]
     fn onboard(
         &mut self,
-        ctx: &<Self as Actor>::Context,
+        ctx: &mut <Self as Actor>::Context,
         checklist: OnboardingChecklist,
     ) -> anyhow::Result<()> {
         match &self.state {
             State::Onboarding { addrs } => {
+                let cloned_addrs = addrs.clone();
                 for task in checklist {
                     self.do_onboarding_task(ctx, task)
                         .context("onboarding task")
@@ -137,7 +237,7 @@ impl UserSession {
                 }
 
                 self.state = State::Onboarded {
-                    addrs: addrs.clone(),
+                    addrs: cloned_addrs,
                 };
 
                 info!("User finished onboarding");
@@ -158,6 +258,7 @@ impl UserSession {
         let serialized = serde_json::to_string(&msg).context("serializing ServerMessage")?;
         info!("sending message '{}'", serialized);
         ctx.text(serialized);
+        info!("message sent.");
 
         Ok(())
     }
@@ -173,7 +274,8 @@ impl Actor for UserSession {
         // Say hello to the greeter
         let addr = ctx.address();
         let hello_msg = GreeterMessage::Hello(addr);
-        send_or_log_err(&self.greeter_addr, hello_msg);
+        let greeter = self.greeter_addr.clone();
+        self.send_and_check_response(ctx, greeter, hello_msg);
 
         info!("started done");
     }
@@ -184,9 +286,11 @@ impl Actor for UserSession {
         actix::Running::Stop
     }
 
-    #[instrument(skip(_ctx))]
-    fn stopped(&mut self, _ctx: &mut Self::Context) {
+    #[instrument(skip(ctx))]
+    fn stopped(&mut self, ctx: &mut Self::Context) {
         info!("stopped");
+        // TODO
+        todo!()
         // self.signup_feed.unregister(ctx.address());
     }
 }
@@ -202,6 +306,8 @@ impl Handler<SignupListMessage> for UserSession {
             bail!("wasn't expecting SignupListMessage before welcoming");
         }
 
+        info!("made it this far");
+
         match msg {
             SignupListMessage::All { list } => {
                 // WelcomeInfo
@@ -209,12 +315,13 @@ impl Handler<SignupListMessage> for UserSession {
                 // TODO: This is a bit confusing that we're sending a
                 // `ServerMessage::Welcome` in the `Welcomed` state.
                 let server_msg = ServerMessage::Welcome(welcome_info);
-                self.send_msg(ctx, server_msg)?;
+                self.send_msg(ctx, server_msg).context("got whole list")?;
             }
             SignupListMessage::New { new } => {
                 // Signup update
                 let server_msg = ServerMessage::NewSignup(new);
-                self.send_msg(ctx, server_msg)?;
+                self.send_msg(ctx, server_msg).context("got list update")?;
+                warn!("Update has been forwarded to client");
             }
         }
 
@@ -236,11 +343,12 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for UserSession {
             }
             Ok(ws::Message::Pong(_)) => {}
             Ok(ws::Message::Text(text)) => match serde_json::from_str::<ClientMessage>(&text) {
-                Ok(message) => {
+                Ok(msg) => {
                     // Parse JSON into an enum and just send it back to the actor to be processed
                     // by another handler below, it is much more convenient to just parse it in one
                     // place and have typed data structure everywhere else
-                    send_or_log_err(&ctx.address(), message)
+                    let addr = ctx.address().clone().wrap();
+                    self.send_and_check_response(ctx, addr, msg);
                 }
                 Err(error) => {
                     error!("Failed to parse client message: {}\n{}", error, text);
@@ -261,12 +369,17 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for UserSession {
 impl Handler<ClientMessage> for UserSession {
     type Result = ();
 
-    #[instrument(skip(_ctx), name = "ClientMessageHandler")]
-    fn handle(&mut self, msg: ClientMessage, _ctx: &mut Self::Context) -> Self::Result {
+    #[instrument(skip(ctx), name = "ClientMessageHandler")]
+    fn handle(&mut self, msg: ClientMessage, ctx: &mut Self::Context) -> Self::Result {
         match msg {
             ClientMessage::SignMeUp { name } => {
                 // TODO send message to signup list
                 todo!()
+            }
+            ClientMessage::GetList => {
+                self.get_signup_list(ctx)
+                    .context("getting signup list")
+                    .log_err();
             }
         }
     }

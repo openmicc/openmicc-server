@@ -11,13 +11,13 @@ use redis::Client as RedisClient;
 use tracing::{info, instrument};
 
 use crate::signup_list::RedisMessage;
-use crate::utils::{send_or_log_err, LogOk};
+use crate::utils::{LogOk, MyAddr, SendAndCheckResponse};
 
 #[derive(Clone, Message)]
 #[rtype(result = "()")]
 pub enum RedisSubscriberMessage<A: Actor> {
-    Register(Addr<A>),
-    Unregister(Addr<A>),
+    Register(MyAddr<A>),
+    Unregister(MyAddr<A>),
 }
 
 impl<A: Actor> Debug for RedisSubscriberMessage<A> {
@@ -34,17 +34,17 @@ where
     A: Actor + Handler<RedisMessage>,
     A::Context: ToEnvelope<A, RedisMessage>,
 {
-    #[instrument(skip(_ctx), name = "RedisMessageStreamHandler")]
-    fn handle(&mut self, msg: RedisMessage, _ctx: &mut Self::Context) {
+    #[instrument(skip(ctx), name = "RedisMessageStreamHandler")]
+    fn handle(&mut self, msg: RedisMessage, ctx: &mut Self::Context) {
         info!("RS got RedisMessage {:?}", msg);
-        self.broadcast(msg);
+        self.broadcast(ctx, msg);
     }
 }
 
 pub struct RedisSubscriber<A: Actor> {
     client: RedisClient,
     topic: String,
-    addrs: HashSet<Addr<A>>,
+    addrs: HashSet<MyAddr<A>>,
 }
 
 impl<A: Actor> Debug for RedisSubscriber<A> {
@@ -70,22 +70,24 @@ where
 
     /// Register an actor as a forwarding address
     #[instrument]
-    fn register(&mut self, addr: Addr<A>) {
+    fn register(&mut self, addr: MyAddr<A>) {
         self.addrs.insert(addr);
     }
 
     /// Unregister an actor as a forwarding address
     #[instrument]
-    fn unregister(&mut self, addr: Addr<A>) -> bool {
+    fn unregister(&mut self, addr: MyAddr<A>) -> bool {
         self.addrs.remove(&addr)
     }
 
-    #[instrument]
-    fn broadcast(&self, msg: RedisMessage) {
+    #[instrument(skip(ctx))]
+    fn broadcast(&mut self, ctx: &mut <Self as Actor>::Context, msg: RedisMessage) {
         info!("Sending to {} addrs", self.addrs.len());
 
-        for addr in &self.addrs {
-            send_or_log_err(addr, msg.clone());
+        let addrs = self.addrs.clone();
+
+        for addr in addrs {
+            self.send_and_check_response(ctx, addr, msg.clone());
         }
 
         info!("sent payload");

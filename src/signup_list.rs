@@ -5,12 +5,12 @@ use actix::{Actor, Context};
 use anyhow::Context as AnyhowContext;
 use redis::{Client as RedisClient, Commands, Connection as RedisConnection};
 use serde::{Deserialize, Serialize};
-use tracing::{info, instrument};
+use tracing::{info, instrument, warn};
 
 use crate::constants::{SIGNUP_LIST, SIGNUP_TOPIC};
 use crate::redis_subscriber::{RedisSubscriber, RedisSubscriberMessage};
 use crate::user_session::{SignupListMessage, UserSession};
-use crate::utils::{send_or_log_err, LogError, MyAddr};
+use crate::utils::{LogError, MyAddr, SendAndCheckResult, WrapAddr};
 
 #[derive(Clone, Debug, Message)]
 #[rtype(result = "()")]
@@ -35,24 +35,28 @@ impl TryFrom<redis::Msg> for RedisMessage {
 impl Handler<RedisMessage> for SignupListActor {
     type Result = ();
 
-    #[instrument(skip(self, _ctx), name = "RedisMessageHandler")]
-    fn handle(&mut self, msg: RedisMessage, _ctx: &mut Self::Context) -> Self::Result {
+    #[instrument(skip(self, ctx), name = "RedisMessageHandler")]
+    fn handle(&mut self, msg: RedisMessage, ctx: &mut Self::Context) -> Self::Result {
         info!("handle redis message");
         match msg {
             RedisMessage::Update { topic, content } => {
                 info!("signup received redis update.");
                 info!("{}: {}", topic, content);
 
+                // Should be, but just double checking
                 if topic == SIGNUP_TOPIC {
                     let msg = SignupListMessage::New {
                         new: content.into(),
                     };
-                    for addr in &self.users {
-                        send_or_log_err(&addr, msg.clone());
+                    let users = self.users.clone();
+                    for user in users {
+                        self.send_and_check_result(ctx, user, msg.clone())
                     }
+                } else {
+                    warn!("got weird topic: {}", topic);
                 }
 
-                info!("signup dispatched messges");
+                info!("signup dispatched messages");
             }
         }
     }
@@ -61,8 +65,8 @@ impl Handler<RedisMessage> for SignupListActor {
 impl Handler<SubscribeToSignupList> for SignupListActor {
     type Result = anyhow::Result<()>;
 
-    #[instrument(skip(self, _ctx), name = "SubscribeToSignupListHandler")]
-    fn handle(&mut self, msg: SubscribeToSignupList, _ctx: &mut Self::Context) -> Self::Result {
+    #[instrument(skip(self, ctx), name = "SubscribeToSignupListHandler")]
+    fn handle(&mut self, msg: SubscribeToSignupList, ctx: &mut Self::Context) -> Self::Result {
         info!("got signup list subscribe request");
         // Get the current signup list
         let current_list = self.get_list()?;
@@ -77,7 +81,7 @@ impl Handler<SubscribeToSignupList> for SignupListActor {
 
         // Send the current list to the new user
         let list_msg = SignupListMessage::All { list: current_list };
-        send_or_log_err(&addr, list_msg);
+        self.send_and_check_result(ctx, addr, list_msg);
 
         info!("sent list to user");
 
@@ -96,13 +100,52 @@ pub fn start_signup_list(redis: RedisClient) -> anyhow::Result<Addr<SignupListAc
 
 // Signup-list messages
 //
+//
 
+// TODO remove in favor of `user_api`
 /// Sent from UserSession to SignupListActor
 /// to receive updates about the signup list.
 /// A snapshot of the current signup list is returned.
 #[derive(Debug, Message)]
 #[rtype(result = "anyhow::Result<()>")]
 pub struct SubscribeToSignupList(pub MyAddr<UserSession>);
+
+/// Signup list API for users
+pub mod user_api {
+    use super::*;
+    use actix::{Message, MessageResult};
+
+    /// Subscribe to list updates
+    #[derive(Debug, Message)]
+    #[rtype(result = "anyhow::Result<()>")]
+    pub struct Subscribe(pub MyAddr<UserSession>);
+
+    /// Unsubscribe from list updates
+    #[derive(Debug, Message)]
+    #[rtype(result = "anyhow::Result<()>")]
+    pub struct Unubscribe(pub MyAddr<UserSession>);
+
+    /// Add my name to the list
+    #[derive(Debug, Message)]
+    #[rtype(result = "anyhow::Result<()>")]
+    pub struct SignUp(pub String);
+
+    /// Get a snapshot of the current list
+    #[derive(Debug, Message)]
+    #[rtype(result = "anyhow::Result<SignupList>")]
+    pub struct GetList;
+
+    impl Handler<GetList> for SignupListActor {
+        type Result = MessageResult<GetList>;
+
+        #[instrument(skip(self, _ctx), name = "GetListHandler")]
+        fn handle(&mut self, _msg: GetList, _ctx: &mut Self::Context) -> Self::Result {
+            // Get the current signup list
+            // let current_list = self.get_list()?;
+            MessageResult(self.get_list())
+        }
+    }
+}
 
 pub struct SignupListActor {
     /// Resdis client
@@ -188,6 +231,7 @@ where
 impl Actor for SignupListActor {
     type Context = Context<Self>;
 
+    #[instrument(skip_all)]
     fn started(&mut self, ctx: &mut Self::Context) {
         info!("Start signup list");
 
@@ -196,7 +240,7 @@ impl Actor for SignupListActor {
 
         let subscriber = RedisSubscriber::<Self>::new(self.client.clone(), SIGNUP_TOPIC);
         let subscriber_addr = subscriber.start();
-        let register_msg = RedisSubscriberMessage::Register(addr);
+        let register_msg = RedisSubscriberMessage::Register(addr.wrap());
 
         subscriber_addr
             .try_send(register_msg)
@@ -206,6 +250,7 @@ impl Actor for SignupListActor {
         info!("signup list actor start finished");
     }
 
+    #[instrument(skip_all)]
     fn stopped(&mut self, _ctx: &mut Self::Context) {
         info!("Stop signup list");
     }
