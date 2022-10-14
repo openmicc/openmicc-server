@@ -79,9 +79,7 @@ impl ClientWriteHalf {
     }
 
     pub async fn signup(&mut self, name: &str) -> anyhow::Result<()> {
-        let signup_msg = ClientMessage::SignMeUp {
-            name: name.to_string().into(),
-        };
+        let signup_msg = ClientMessage::SignMeUp(name.to_string().into());
         self.send(signup_msg)?;
 
         Ok(())

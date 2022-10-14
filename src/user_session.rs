@@ -37,21 +37,21 @@ impl SignupListCounter {
 
 /// Sent from client to sever
 #[derive(Debug, Message, Deserialize, Serialize)]
-#[serde(tag = "action")]
+#[serde(tag = "type", content = "payload")]
 #[serde(rename_all = "camelCase")]
 #[rtype(result = "()")]
 pub enum ClientMessage {
     /// Get the whole current signup list
     GetList,
     /// Sign me up.
-    SignMeUp { name: SignupListEntry },
+    SignMeUp(SignupListEntry),
     // TODO: ImReady (I'm ready to perform)
 }
 
 /// Info sent to the client upon connecting to the server
 /// Sent from server to client
 #[derive(Debug, Message, Deserialize, Serialize)]
-#[serde(tag = "action")]
+#[serde(tag = "type", content = "payload")]
 #[serde(rename = "camelCase")]
 #[rtype(result = "()")]
 pub enum ServerMessage {
@@ -69,7 +69,7 @@ pub enum ServerMessage {
         counter: SignupListCounter,
     },
     /// A snapshot of the whole current sign-up list.
-    WholeSignupList { list: SignupList },
+    WholeSignupList(SignupList),
     // TODO: AreYouReady (ready to perform?)
 }
 
@@ -156,7 +156,7 @@ impl UserSession {
         let do_later = actor_fut
             .map(|list_res: anyhow::Result<SignupList>, act, ctx| {
                 info!("Now is later. Result = {:?}", list_res);
-                let msg = ServerMessage::WholeSignupList { list: list_res? };
+                let msg = ServerMessage::WholeSignupList(list_res?);
                 act.send_msg(ctx, msg)
                     .context("sending message to client")?;
                 info!("message has been sent.");
@@ -343,7 +343,7 @@ impl Handler<SignupListMessage> for UserSession {
         match msg {
             SignupListMessage::All { list } => {
                 // WelcomeInfo
-                let server_msg = ServerMessage::WholeSignupList { list };
+                let server_msg = ServerMessage::WholeSignupList(list);
                 self.send_msg(ctx, server_msg).context("got whole list")?;
             }
             SignupListMessage::New { new, counter } => {
@@ -401,7 +401,7 @@ impl Handler<ClientMessage> for UserSession {
     #[instrument(skip(ctx), name = "ClientMessageHandler")]
     fn handle(&mut self, msg: ClientMessage, ctx: &mut Self::Context) -> Self::Result {
         match msg {
-            ClientMessage::SignMeUp { name } => {
+            ClientMessage::SignMeUp(name) => {
                 self.sign_me_up(ctx, name).context("signing up").log_err();
             }
             ClientMessage::GetList => {
