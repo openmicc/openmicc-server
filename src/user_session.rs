@@ -52,7 +52,7 @@ pub enum ClientMessage {
 /// Sent from server to client
 #[derive(Debug, Message, Deserialize, Serialize)]
 #[serde(tag = "type", content = "payload")]
-#[serde(rename = "camelCase")]
+#[serde(rename_all = "camelCase")]
 #[rtype(result = "()")]
 pub enum ServerMessage {
     // TODO: Pop from list (after finishing)
