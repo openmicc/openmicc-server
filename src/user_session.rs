@@ -9,11 +9,11 @@ use tracing::{error, info, info_span, instrument, warn};
 use tracing_actix::ActorInstrument;
 
 use crate::greeter::{AddressBook, Greeter, GreeterMessage, OnboardingChecklist, OnboardingTask};
-use crate::signup_list::user_api::{GetList, SignMeUp, Subscribe, Unsubscribe};
+use crate::signup_list::user_api::{GetList, SignMeUp, Subscribe, TakeMeOff, Unsubscribe};
 use crate::signup_list::{ListKeeper, SignupList};
 use crate::signup_list_entry::{IdAndReceipt, SignupId, SignupListEntry, SignupListEntryText};
 use crate::signup_receipt::SignupReceipt;
-use crate::utils::{LogError, LogOk, MyAddr, SendAndCheckResponse, WrapAddr};
+use crate::utils::{LogError, LogOk, MyAddr, SendAndCheckResponse, SendAndCheckResult, WrapAddr};
 
 type SignupListCounterInner = usize;
 
@@ -47,6 +47,8 @@ pub enum ClientMessage {
     GetList,
     /// Sign me up.
     SignMeUp(SignupListEntryText),
+    /// Take me off the list.
+    TakeMeOff(IdAndReceipt),
     // TODO: ImReady (I'm ready to perform)
 }
 
@@ -70,6 +72,17 @@ pub enum ServerMessage {
         /// and ask for the whole list
         counter: SignupListCounter,
     },
+
+    /// An entry has been deleted from the sign-up list.
+    ListRemoval {
+        /// The id of the removed entry
+        id: SignupId,
+        /// Count list updates so that
+        /// clients can tell if they've missed one
+        /// and ask for the whole list
+        counter: SignupListCounter,
+    },
+
     /// A snapshot of the whole current sign-up list.
     WholeSignupList(SignupList),
 
@@ -87,9 +100,17 @@ pub enum ServerMessage {
 pub enum SignupListMessage {
     All {
         list: SignupList,
+        // TODO: Include counter here as well?
+        // (probably should refactor into
+        // CountedSignupListMessage { msg: SignupListMessage, counter: SignupListCounter } ot something)
+        // and then enum SignupListMessage { All(SignupList), Add(SignupListEntry), Del(SignupId) }
     },
-    New {
+    Add {
         new: SignupListEntry,
+        counter: SignupListCounter,
+    },
+    Del {
+        id: SignupId,
         counter: SignupListCounter,
     },
 }
@@ -242,6 +263,39 @@ impl UserSession {
     }
 
     #[instrument(skip(ctx))]
+    fn cancel_signup(
+        &mut self,
+        ctx: &mut <Self as Actor>::Context,
+        id_and_receipt: IdAndReceipt,
+    ) -> anyhow::Result<()> {
+        match &self.state {
+            State::Fresh => bail!("cannot get signup list before onboarding"),
+            // TODO: refactor state
+            State::Onboarding { addrs } => {
+                let dest = addrs.signup_list.clone();
+                self.cancel_signup_inner(ctx, id_and_receipt, dest);
+            }
+            State::Onboarded { addrs } => {
+                let dest = addrs.signup_list.clone();
+                self.cancel_signup_inner(ctx, id_and_receipt, dest);
+            }
+        }
+
+        Ok(())
+    }
+
+    #[instrument(skip(ctx))]
+    fn cancel_signup_inner(
+        &mut self,
+        ctx: &mut <Self as Actor>::Context,
+        id_and_receipt: IdAndReceipt,
+        signup_list: MyAddr<ListKeeper>,
+    ) {
+        let cancel_msg = TakeMeOff(id_and_receipt);
+        self.send_and_check_result(ctx, signup_list, cancel_msg);
+    }
+
+    #[instrument(skip(ctx))]
     fn subscribe_to_signup_list(
         &mut self,
         ctx: &mut <Self as Actor>::Context,
@@ -382,18 +436,20 @@ impl Handler<SignupListMessage> for UserSession {
                 let server_msg = ServerMessage::WholeSignupList(list);
                 self.send_msg(ctx, server_msg).context("got whole list")?;
             }
-            SignupListMessage::New { new, counter } => {
+            SignupListMessage::Add { new, counter } => {
                 // Signup update
                 let server_msg = ServerMessage::NewSignup {
                     entry: new,
                     counter,
                 };
-                self.send_msg(ctx, server_msg).context("got list update")?;
+                self.send_msg(ctx, server_msg)
+                    .context("got list addition")?;
+            }
+            SignupListMessage::Del { id, counter } => {
+                let server_msg = ServerMessage::ListRemoval { id, counter };
+                self.send_msg(ctx, server_msg).context("got list removal")?;
             }
         }
-
-        // forward the message over WebSockets to the client, encoded as JSON
-        info!("Serialized...");
 
         info!("forwarded signup list message over WS");
 
@@ -445,6 +501,11 @@ impl Handler<ClientMessage> for UserSession {
             ClientMessage::GetList => {
                 self.get_signup_list(ctx)
                     .context("getting signup list")
+                    .log_err();
+            }
+            ClientMessage::TakeMeOff(id_and_receipt) => {
+                self.cancel_signup(ctx, id_and_receipt)
+                    .context("cancelling signup")
                     .log_err();
             }
         }

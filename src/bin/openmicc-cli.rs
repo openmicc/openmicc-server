@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use clap::{Parser, Subcommand};
-use openmicc_server::signup_list_entry::SignupListEntryText;
+use openmicc_server::signup_list_entry::{IdAndReceipt, SignupIdInner, SignupListEntryText};
 use rustyline::error::ReadlineError;
 use strum::{EnumDiscriminants, EnumIter, EnumString, IntoEnumIterator};
 use tracing::{error, info};
@@ -72,7 +72,7 @@ impl ClientWriteHalf {
 
     /// Send a ClientMessage to the server
     fn send(&mut self, msg: ClientMessage) -> anyhow::Result<()> {
-        let serialized = serde_json::to_string(&msg)?;
+        let serialized = serde_json::to_string(&msg).context("serializing message for ws")?;
         let ws_msg = websocket::Message::text(serialized);
         self.ws_tx.send_message(&ws_msg)?;
 
@@ -88,6 +88,13 @@ impl ClientWriteHalf {
 
     pub async fn get_list(&mut self) -> anyhow::Result<()> {
         let msg = ClientMessage::GetList;
+        self.send(msg)?;
+
+        Ok(())
+    }
+
+    pub async fn cancel(&mut self, id_and_receipt: IdAndReceipt) -> anyhow::Result<()> {
+        let msg = ClientMessage::TakeMeOff(id_and_receipt);
         self.send(msg)?;
 
         Ok(())
@@ -213,6 +220,8 @@ enum ReplCommand {
     SignUp { name: String },
     /// Get the current signup list
     List,
+    /// Cancel signup (remove from list)
+    Cancel(IdAndReceipt),
 }
 
 impl ReplCommand {
@@ -258,6 +267,13 @@ impl ReplCommand {
                 0 => Ok(ReplCommand::List),
                 _ => bail!("`list` takes no args"),
             },
+            Cancel => match rest {
+                &[id, receipt] => Ok(ReplCommand::Cancel(IdAndReceipt {
+                    id: id.parse::<SignupIdInner>().context("parsing id")?.into(),
+                    receipt: receipt.parse().context("parsing receipt")?,
+                })),
+                _ => bail!("`cancel` requires two args: `id` and `receipt`"),
+            },
         }
     }
 }
@@ -274,6 +290,10 @@ async fn handle_command(
         }
         ReplCommand::List => {
             client.get_list().await.context("getting list")?;
+            ControlFlow::Continue(())
+        }
+        ReplCommand::Cancel(id_and_receipt) => {
+            client.cancel(id_and_receipt).await.context("cancelling")?;
             ControlFlow::Continue(())
         }
     };

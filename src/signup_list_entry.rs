@@ -1,14 +1,37 @@
-use std::{convert::Infallible, fmt::Display, str::FromStr};
+use std::{convert::Infallible, fmt::Display, ops::Deref, str::FromStr};
 
 use redis::{FromRedisValue, ToRedisArgs};
 use serde::{Deserialize, Serialize};
 
 use crate::signup_receipt::SignupReceipt;
 
-type SignupIdInner = usize;
+pub type SignupIdInner = usize;
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct SignupId(SignupIdInner);
+
+impl Deref for SignupId {
+    type Target = SignupIdInner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl FromStr for SignupId {
+    // TODO: What's the right error to use?
+    type Err = std::num::ParseIntError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        s.parse().map(Self)
+    }
+}
+
+impl From<SignupIdInner> for SignupId {
+    fn from(inner: SignupIdInner) -> Self {
+        Self(inner)
+    }
+}
 
 impl FromRedisValue for SignupId {
     fn from_redis_value(v: &redis::Value) -> redis::RedisResult<Self> {
@@ -73,7 +96,6 @@ pub struct EntryAndReceipt {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct IdAndReceipt {
-    #[serde(flatten)]
     pub id: SignupId,
     pub receipt: SignupReceipt,
 }
