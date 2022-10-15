@@ -64,7 +64,7 @@ pub enum ServerMessage {
     /// A notification of a new sign-up.
     NewSignup {
         /// The new list entry
-        name: SignupListEntry,
+        entry: SignupListEntry,
         /// Count list updates so that
         /// clients can tell if they've missed one
         /// and ask for the whole list
@@ -384,7 +384,10 @@ impl Handler<SignupListMessage> for UserSession {
             }
             SignupListMessage::New { new, counter } => {
                 // Signup update
-                let server_msg = ServerMessage::NewSignup { name: new, counter };
+                let server_msg = ServerMessage::NewSignup {
+                    entry: new,
+                    counter,
+                };
                 self.send_msg(ctx, server_msg).context("got list update")?;
             }
         }
