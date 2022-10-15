@@ -10,8 +10,10 @@ use tracing_actix::ActorInstrument;
 
 use crate::greeter::{AddressBook, Greeter, GreeterMessage, OnboardingChecklist, OnboardingTask};
 use crate::signup_list::user_api::{GetList, SignMeUp, Subscribe, Unsubscribe};
-use crate::signup_list::{ListKeeper, SignupList, SignupListEntry};
-use crate::utils::{LogError, MyAddr, SendAndCheckResponse, SendAndCheckResult, WrapAddr};
+use crate::signup_list::{ListKeeper, SignupList};
+use crate::signup_list_entry::{IdAndReceipt, SignupId, SignupListEntry, SignupListEntryText};
+use crate::signup_receipt::SignupReceipt;
+use crate::utils::{LogError, LogOk, MyAddr, SendAndCheckResponse, WrapAddr};
 
 type SignupListCounterInner = usize;
 
@@ -44,7 +46,7 @@ pub enum ClientMessage {
     /// Get the whole current signup list
     GetList,
     /// Sign me up.
-    SignMeUp(SignupListEntry),
+    SignMeUp(SignupListEntryText),
     // TODO: ImReady (I'm ready to perform)
 }
 
@@ -70,7 +72,12 @@ pub enum ServerMessage {
     },
     /// A snapshot of the whole current sign-up list.
     WholeSignupList(SignupList),
-    // TODO: AreYouReady (ready to perform?)
+
+    /// The user has successfully signed up and obtained a receipt.
+    SignupSuccess {
+        id: SignupId,
+        receipt: SignupReceipt,
+    }, // TODO: AreYouReady (ready to perform?)
 }
 
 /// A message from the SignupListActor to the UserSession
@@ -174,12 +181,41 @@ impl UserSession {
     fn sign_me_up(
         &mut self,
         ctx: &mut <Self as Actor>::Context,
-        name: SignupListEntry,
+        text: SignupListEntryText,
     ) -> anyhow::Result<()> {
         if let State::Onboarded { addrs } = &self.state {
-            let signup_msg = SignMeUp(name);
+            let signup_msg = SignMeUp(text);
             let signup_list = addrs.signup_list.clone();
-            self.send_and_check_result(ctx, signup_list, signup_msg);
+
+            let receipt_res_fut = async move {
+                let receipt = signup_list
+                    .send(signup_msg)
+                    .await
+                    .context("signup list mailbox error")?
+                    .context("signup failure")?;
+
+                Ok::<_, anyhow::Error>(receipt)
+            };
+
+            let span = info_span!("forwarding signup receipt to client");
+            let do_later =
+                receipt_res_fut
+                    .into_actor(self)
+                    .actor_instrument(span)
+                    .map(|res, act, ctx| {
+                        let IdAndReceipt { id, receipt } = res?;
+                        let msg = ServerMessage::SignupSuccess { id, receipt };
+                        act.send_msg(ctx, msg)?;
+                        Ok(())
+                    });
+
+            let logged = do_later.map(|res, _, _| {
+                res.ok_log_err();
+            });
+
+            ctx.wait(logged);
+
+            // self.send_and_check_result(ctx, signup_list, signup_msg);
         } else {
             bail!("can only sign up after onboarding");
         }
@@ -350,7 +386,6 @@ impl Handler<SignupListMessage> for UserSession {
                 // Signup update
                 let server_msg = ServerMessage::NewSignup { name: new, counter };
                 self.send_msg(ctx, server_msg).context("got list update")?;
-                warn!("Update has been forwarded to client");
             }
         }
 
@@ -401,8 +436,8 @@ impl Handler<ClientMessage> for UserSession {
     #[instrument(skip(ctx), name = "ClientMessageHandler")]
     fn handle(&mut self, msg: ClientMessage, ctx: &mut Self::Context) -> Self::Result {
         match msg {
-            ClientMessage::SignMeUp(name) => {
-                self.sign_me_up(ctx, name).context("signing up").log_err();
+            ClientMessage::SignMeUp(text) => {
+                self.sign_me_up(ctx, text).context("signing up").log_err();
             }
             ClientMessage::GetList => {
                 self.get_signup_list(ctx)
