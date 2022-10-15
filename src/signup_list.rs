@@ -305,9 +305,7 @@ impl ListKeeper {
 
                 let index = deserialized_list
                     .into_iter()
-                    .enumerate()
-                    .find(|candidate| candidate.1.id == id)
-                    .map(|(i, _)| i)
+                    .position(|candidate| candidate.id == id)
                     .ok_or(anyhow!("No list entry with id {:?} to remove", id))?;
 
                 // Redis insists that we remove list items by value, not index
