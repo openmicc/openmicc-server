@@ -112,6 +112,22 @@ pub mod user_api {
         }
     }
 
+    /// Get a snapshot of the current list
+    #[derive(Debug, Message)]
+    #[rtype(result = "anyhow::Result<SignupList>")]
+    pub struct GetList;
+
+    impl Handler<GetList> for ListKeeper {
+        type Result = MessageResult<GetList>;
+
+        #[instrument(skip(self, _ctx), name = "GetListHandler")]
+        fn handle(&mut self, _msg: GetList, _ctx: &mut Self::Context) -> Self::Result {
+            // Get the current signup list
+            // let current_list = self.get_list()?;
+            MessageResult(self.get_list())
+        }
+    }
+
     /// Add my name to the list
     #[derive(Debug, Message)]
     #[rtype(result = "anyhow::Result<IdAndReceipt>")]
@@ -130,22 +146,6 @@ pub mod user_api {
             self.publish_signup(entry_and_receipt)?;
 
             Ok(id_and_receipt)
-        }
-    }
-
-    /// Get a snapshot of the current list
-    #[derive(Debug, Message)]
-    #[rtype(result = "anyhow::Result<SignupList>")]
-    pub struct GetList;
-
-    impl Handler<GetList> for ListKeeper {
-        type Result = MessageResult<GetList>;
-
-        #[instrument(skip(self, _ctx), name = "GetListHandler")]
-        fn handle(&mut self, _msg: GetList, _ctx: &mut Self::Context) -> Self::Result {
-            // Get the current signup list
-            // let current_list = self.get_list()?;
-            MessageResult(self.get_list())
         }
     }
 }
