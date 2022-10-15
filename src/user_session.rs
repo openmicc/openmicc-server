@@ -10,7 +10,7 @@ use tracing_actix::ActorInstrument;
 
 use crate::greeter::{AddressBook, Greeter, GreeterMessage, OnboardingChecklist, OnboardingTask};
 use crate::signup_list::user_api::{GetList, SignMeUp, Subscribe, Unsubscribe};
-use crate::signup_list::{SignupList, SignupListActor, SignupListEntry};
+use crate::signup_list::{ListKeeper, SignupList, SignupListEntry};
 use crate::utils::{LogError, MyAddr, SendAndCheckResponse, SendAndCheckResult, WrapAddr};
 
 type SignupListCounterInner = usize;
@@ -136,7 +136,7 @@ impl UserSession {
     fn get_signup_list_inner(
         &self,
         ctx: &mut <Self as Actor>::Context,
-        dest: MyAddr<SignupListActor>,
+        dest: MyAddr<ListKeeper>,
     ) -> anyhow::Result<()> {
         let list_res_fut = async move {
             let current_list = dest

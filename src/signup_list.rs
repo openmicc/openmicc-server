@@ -12,7 +12,7 @@ use crate::redis_subscriber::{RedisMessage, RedisSubscriber, RedisSubscriberMess
 use crate::user_session::{SignupListCounter, SignupListMessage, UserSession};
 use crate::utils::{LogError, MyAddr, SendAndCheckResult, WrapAddr};
 
-impl Handler<RedisMessage> for SignupListActor {
+impl Handler<RedisMessage> for ListKeeper {
     type Result = ();
 
     #[instrument(skip(self, ctx), name = "CountedRedisMessageHandler")]
@@ -49,11 +49,11 @@ impl Handler<RedisMessage> for SignupListActor {
     }
 }
 
-pub fn start_signup_list(redis: RedisClient) -> anyhow::Result<Addr<SignupListActor>> {
+pub fn start_signup_list(redis: RedisClient) -> anyhow::Result<Addr<ListKeeper>> {
     // TODO: actors should be able to reconnect to redis
     // (or just die & restart would be fine)
     // ((but then how do others get the new address?))
-    let actor = SignupListActor::try_new(redis)?;
+    let actor = ListKeeper::try_new(redis)?;
     let addr = actor.start();
     Ok(addr)
 }
@@ -72,7 +72,7 @@ pub mod user_api {
     #[rtype(result = "()")]
     pub struct Subscribe(pub MyAddr<UserSession>);
 
-    impl Handler<Subscribe> for SignupListActor {
+    impl Handler<Subscribe> for ListKeeper {
         type Result = ();
 
         #[instrument(skip(self, _ctx))]
@@ -90,7 +90,7 @@ pub mod user_api {
     #[rtype(result = "()")]
     pub struct Unsubscribe(pub MyAddr<UserSession>);
 
-    impl Handler<Unsubscribe> for SignupListActor {
+    impl Handler<Unsubscribe> for ListKeeper {
         type Result = ();
 
         #[instrument(skip(self, _ctx))]
@@ -108,7 +108,7 @@ pub mod user_api {
     #[rtype(result = "anyhow::Result<()>")]
     pub struct SignMeUp(pub SignupListEntry);
 
-    impl Handler<SignMeUp> for SignupListActor {
+    impl Handler<SignMeUp> for ListKeeper {
         type Result = anyhow::Result<()>;
 
         fn handle(&mut self, msg: SignMeUp, _ctx: &mut Self::Context) -> Self::Result {
@@ -122,7 +122,7 @@ pub mod user_api {
     #[rtype(result = "anyhow::Result<SignupList>")]
     pub struct GetList;
 
-    impl Handler<GetList> for SignupListActor {
+    impl Handler<GetList> for ListKeeper {
         type Result = MessageResult<GetList>;
 
         #[instrument(skip(self, _ctx), name = "GetListHandler")]
@@ -134,7 +134,7 @@ pub mod user_api {
     }
 }
 
-pub struct SignupListActor {
+pub struct ListKeeper {
     /// Resdis client
     client: RedisClient,
     /// Redis connection
@@ -146,7 +146,7 @@ pub struct SignupListActor {
     update_counter: SignupListCounter,
 }
 
-impl SignupListActor {
+impl ListKeeper {
     #[instrument]
     fn try_new(client: RedisClient) -> anyhow::Result<Self> {
         let redis = client.get_connection()?;
@@ -220,7 +220,7 @@ where
     }
 }
 
-impl Actor for SignupListActor {
+impl Actor for ListKeeper {
     type Context = Context<Self>;
 
     #[instrument(skip_all)]

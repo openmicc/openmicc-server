@@ -4,7 +4,7 @@ use actix::{Actor, Context, Handler, Message};
 use tracing::{info, instrument};
 
 use crate::{
-    signup_list::SignupListActor,
+    signup_list::ListKeeper,
     user_session::{UserSession, WelcomeMessage},
     utils::{MyAddr, SendAndCheckResponse, WrapAddr},
 };
@@ -44,7 +44,7 @@ impl IntoIterator for OnboardingChecklist {
 
 #[derive(Debug)]
 pub struct AddressBook {
-    pub signup_list: MyAddr<SignupListActor>,
+    pub signup_list: MyAddr<ListKeeper>,
 }
 
 impl Clone for AddressBook {
