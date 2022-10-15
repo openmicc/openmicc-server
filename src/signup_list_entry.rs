@@ -1,4 +1,4 @@
-use std::{convert::Infallible, fmt::Display, str::FromStr};
+use std::{convert::Infallible, fmt::Display, ops::Deref, str::FromStr};
 
 use redis::{FromRedisValue, ToRedisArgs};
 use serde::{Deserialize, Serialize};
@@ -9,6 +9,23 @@ pub type SignupIdInner = usize;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct SignupId(SignupIdInner);
+
+impl Deref for SignupId {
+    type Target = SignupIdInner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl FromStr for SignupId {
+    // TODO: What's the right error to use?
+    type Err = std::num::ParseIntError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        s.parse().map(Self)
+    }
+}
 
 impl From<SignupIdInner> for SignupId {
     fn from(inner: SignupIdInner) -> Self {

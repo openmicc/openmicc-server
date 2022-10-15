@@ -72,6 +72,17 @@ pub enum ServerMessage {
         /// and ask for the whole list
         counter: SignupListCounter,
     },
+
+    /// An entry has been deleted from the sign-up list.
+    ListRemoval {
+        /// The id of the removed entry
+        id: SignupId,
+        /// Count list updates so that
+        /// clients can tell if they've missed one
+        /// and ask for the whole list
+        counter: SignupListCounter,
+    },
+
     /// A snapshot of the whole current sign-up list.
     WholeSignupList(SignupList),
 
@@ -89,9 +100,17 @@ pub enum ServerMessage {
 pub enum SignupListMessage {
     All {
         list: SignupList,
+        // TODO: Include counter here as well?
+        // (probably should refactor into
+        // CountedSignupListMessage { msg: SignupListMessage, counter: SignupListCounter } ot something)
+        // and then enum SignupListMessage { All(SignupList), Add(SignupListEntry), Del(SignupId) }
     },
-    New {
+    Add {
         new: SignupListEntry,
+        counter: SignupListCounter,
+    },
+    Del {
+        id: SignupId,
         counter: SignupListCounter,
     },
 }
@@ -417,18 +436,20 @@ impl Handler<SignupListMessage> for UserSession {
                 let server_msg = ServerMessage::WholeSignupList(list);
                 self.send_msg(ctx, server_msg).context("got whole list")?;
             }
-            SignupListMessage::New { new, counter } => {
+            SignupListMessage::Add { new, counter } => {
                 // Signup update
                 let server_msg = ServerMessage::NewSignup {
                     entry: new,
                     counter,
                 };
-                self.send_msg(ctx, server_msg).context("got list update")?;
+                self.send_msg(ctx, server_msg)
+                    .context("got list addition")?;
+            }
+            SignupListMessage::Del { id, counter } => {
+                let server_msg = ServerMessage::ListRemoval { id, counter };
+                self.send_msg(ctx, server_msg).context("got list removal")?;
             }
         }
-
-        // forward the message over WebSockets to the client, encoded as JSON
-        info!("Serialized...");
 
         info!("forwarded signup list message over WS");
 
