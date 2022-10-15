@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use actix::prelude::*;
 use actix::{Actor, Context};
 use anyhow::{anyhow, bail, Context as AnyhowContext};
-use redis::{Client as RedisClient, Commands, Connection as RedisConnection};
+use redis::{Client as RedisClient, Commands, Connection as RedisConnection, RedisResult};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tracing::{info, instrument, warn};
@@ -393,7 +393,7 @@ impl Actor for ListKeeper {
 }
 
 #[instrument(skip(conn))]
-fn get_raw_list(conn: &mut RedisConnection) -> anyhow::Result<Vec<String>> {
+fn get_raw_list(conn: &mut RedisConnection) -> RedisResult<Vec<String>> {
     let result = conn.lrange(SIGNUP_LIST, 0, -1);
     let encoded_list: Vec<String> = result?;
 
@@ -409,8 +409,8 @@ fn deserialize_list<T: DeserializeOwned>(raw_list: &Vec<String>) -> serde_json::
 
 #[instrument(skip(conn))]
 fn get_list_as<T: DeserializeOwned>(conn: &mut RedisConnection) -> anyhow::Result<Vec<T>> {
-    let raw_list = get_raw_list(conn)?;
-    let list = deserialize_list(&raw_list)?;
+    let raw_list = get_raw_list(conn).context("getting raw list")?;
+    let list = deserialize_list(&raw_list).context("deserializing list")?;
 
     Ok(list)
 }

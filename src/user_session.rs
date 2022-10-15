@@ -496,16 +496,18 @@ impl Handler<ClientMessage> for UserSession {
     fn handle(&mut self, msg: ClientMessage, ctx: &mut Self::Context) -> Self::Result {
         match msg {
             ClientMessage::SignMeUp(text) => {
-                self.sign_me_up(ctx, text).context("signing up").log_err();
+                self.sign_me_up(ctx, text)
+                    .context("handling ClientMessage::SignMeUp")
+                    .log_err();
             }
             ClientMessage::GetList => {
                 self.get_signup_list(ctx)
-                    .context("getting signup list")
+                    .context("handling ClientMessage::GetList")
                     .log_err();
             }
             ClientMessage::TakeMeOff(id_and_receipt) => {
                 self.cancel_signup(ctx, id_and_receipt)
-                    .context("cancelling signup")
+                    .context("handling ClientMessage::TakeMeOff")
                     .log_err();
             }
         }
