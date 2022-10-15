@@ -11,7 +11,7 @@ use redis::Client as RedisClient;
 use tracing::{info, info_span, instrument, warn};
 use tracing_actix::ActorInstrument;
 
-use crate::utils::{LogOk, MyAddr, SendAndCheckResponse};
+use crate::utils::{LogOk, MyAddr, SendAndCheckResult};
 
 #[derive(Clone, Message)]
 #[rtype(result = "()")]
@@ -30,7 +30,7 @@ impl<A: Actor> Debug for RedisSubscriberMessage<A> {
 }
 
 #[derive(Clone, Debug, Message)]
-#[rtype(result = "()")]
+#[rtype(result = "anyhow::Result<()>")]
 pub enum RedisMessage {
     Update { topic: String, content: String },
 }
@@ -107,7 +107,7 @@ where
         let addrs = self.addrs.clone();
 
         for addr in addrs {
-            self.send_and_check_response(ctx, addr, msg.clone());
+            self.send_and_check_result(ctx, addr, msg.clone());
         }
 
         info!("sent payload");

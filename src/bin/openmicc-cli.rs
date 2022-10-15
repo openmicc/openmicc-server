@@ -3,6 +3,7 @@ use std::str::FromStr;
 
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use clap::{Parser, Subcommand};
+use openmicc_server::signup_list_entry::SignupListEntryText;
 use rustyline::error::ReadlineError;
 use strum::{EnumDiscriminants, EnumIter, EnumString, IntoEnumIterator};
 use tracing::{error, info};
@@ -78,8 +79,8 @@ impl ClientWriteHalf {
         Ok(())
     }
 
-    pub async fn signup(&mut self, name: &str) -> anyhow::Result<()> {
-        let signup_msg = ClientMessage::SignMeUp(name.to_string().into());
+    pub async fn signup(&mut self, text: SignupListEntryText) -> anyhow::Result<()> {
+        let signup_msg = ClientMessage::SignMeUp(text);
         self.send(signup_msg)?;
 
         Ok(())
@@ -268,7 +269,7 @@ async fn handle_command(
     let res = match cmd {
         ReplCommand::Exit => ControlFlow::Break(()),
         ReplCommand::SignUp { name } => {
-            client.signup(&name).await.context("signing up")?;
+            client.signup(name.into()).await.context("signing up")?;
             ControlFlow::Continue(())
         }
         ReplCommand::List => {

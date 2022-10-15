@@ -7,13 +7,15 @@ use redis::{Client as RedisClient, Commands, Connection as RedisConnection};
 use serde::{Deserialize, Serialize};
 use tracing::{info, instrument, warn};
 
-use crate::constants::{SIGNUP_LIST, SIGNUP_TOPIC};
+use crate::constants::{SIGNUP_COUNTER, SIGNUP_LIST, SIGNUP_TOPIC};
 use crate::redis_subscriber::{RedisMessage, RedisSubscriber, RedisSubscriberMessage};
+use crate::signup_list_entry::{EntryAndReceipt, SignupId, SignupListEntry, SignupListEntryText};
+use crate::signup_receipt::SignupReceipt;
 use crate::user_session::{SignupListCounter, SignupListMessage, UserSession};
 use crate::utils::{LogError, MyAddr, SendAndCheckResult, WrapAddr};
 
-impl Handler<RedisMessage> for SignupListActor {
-    type Result = ();
+impl Handler<RedisMessage> for ListKeeper {
+    type Result = anyhow::Result<()>;
 
     #[instrument(skip(self, ctx), name = "CountedRedisMessageHandler")]
     fn handle(&mut self, msg: RedisMessage, ctx: &mut Self::Context) -> Self::Result {
@@ -27,12 +29,15 @@ impl Handler<RedisMessage> for SignupListActor {
                 info!("signup received redis update.");
                 info!("{}: {}", topic, content);
 
+                let decoded: SignupListEntry =
+                    serde_json::from_str(&content).context("decoding update content")?;
+
                 let counter = self.update_counter.incr().clone();
 
                 // Should be, but just double checking
                 if topic == SIGNUP_TOPIC {
                     let msg = SignupListMessage::New {
-                        new: content.into(),
+                        new: decoded,
                         counter,
                     };
                     let users = self.users.clone();
@@ -46,14 +51,16 @@ impl Handler<RedisMessage> for SignupListActor {
                 info!("signup dispatched messages");
             }
         }
+
+        Ok(())
     }
 }
 
-pub fn start_signup_list(redis: RedisClient) -> anyhow::Result<Addr<SignupListActor>> {
+pub fn start_signup_list(redis: RedisClient) -> anyhow::Result<Addr<ListKeeper>> {
     // TODO: actors should be able to reconnect to redis
     // (or just die & restart would be fine)
     // ((but then how do others get the new address?))
-    let actor = SignupListActor::try_new(redis)?;
+    let actor = ListKeeper::try_new(redis)?;
     let addr = actor.start();
     Ok(addr)
 }
@@ -64,6 +71,8 @@ pub fn start_signup_list(redis: RedisClient) -> anyhow::Result<Addr<SignupListAc
 
 /// Signup list API for users
 pub mod user_api {
+    use crate::signup_list_entry::{IdAndReceipt, SignupListEntryText};
+
     use super::*;
     use actix::{Message, MessageResult};
 
@@ -72,7 +81,7 @@ pub mod user_api {
     #[rtype(result = "()")]
     pub struct Subscribe(pub MyAddr<UserSession>);
 
-    impl Handler<Subscribe> for SignupListActor {
+    impl Handler<Subscribe> for ListKeeper {
         type Result = ();
 
         #[instrument(skip(self, _ctx))]
@@ -90,7 +99,7 @@ pub mod user_api {
     #[rtype(result = "()")]
     pub struct Unsubscribe(pub MyAddr<UserSession>);
 
-    impl Handler<Unsubscribe> for SignupListActor {
+    impl Handler<Unsubscribe> for ListKeeper {
         type Result = ();
 
         #[instrument(skip(self, _ctx))]
@@ -105,15 +114,22 @@ pub mod user_api {
 
     /// Add my name to the list
     #[derive(Debug, Message)]
-    #[rtype(result = "anyhow::Result<()>")]
-    pub struct SignMeUp(pub SignupListEntry);
+    #[rtype(result = "anyhow::Result<IdAndReceipt>")]
+    pub struct SignMeUp(pub SignupListEntryText);
 
-    impl Handler<SignMeUp> for SignupListActor {
-        type Result = anyhow::Result<()>;
+    impl Handler<SignMeUp> for ListKeeper {
+        type Result = anyhow::Result<IdAndReceipt>;
 
         fn handle(&mut self, msg: SignMeUp, _ctx: &mut Self::Context) -> Self::Result {
-            let signup = msg.0;
-            self.publish_signup(signup)
+            let text = msg.0;
+            let entry_and_receipt = self.attach_id_and_receipt_to_list_entry(text)?;
+            let id = entry_and_receipt.entry.id.clone();
+            let receipt = entry_and_receipt.receipt.clone();
+            let id_and_receipt = IdAndReceipt { id, receipt };
+
+            self.publish_signup(entry_and_receipt)?;
+
+            Ok(id_and_receipt)
         }
     }
 
@@ -122,7 +138,7 @@ pub mod user_api {
     #[rtype(result = "anyhow::Result<SignupList>")]
     pub struct GetList;
 
-    impl Handler<GetList> for SignupListActor {
+    impl Handler<GetList> for ListKeeper {
         type Result = MessageResult<GetList>;
 
         #[instrument(skip(self, _ctx), name = "GetListHandler")]
@@ -134,7 +150,7 @@ pub mod user_api {
     }
 }
 
-pub struct SignupListActor {
+pub struct ListKeeper {
     /// Resdis client
     client: RedisClient,
     /// Redis connection
@@ -146,7 +162,7 @@ pub struct SignupListActor {
     update_counter: SignupListCounter,
 }
 
-impl SignupListActor {
+impl ListKeeper {
     #[instrument]
     fn try_new(client: RedisClient) -> anyhow::Result<Self> {
         let redis = client.get_connection()?;
@@ -162,14 +178,38 @@ impl SignupListActor {
     }
 
     #[instrument(skip(self))]
-    fn publish_signup(&mut self, signup: SignupListEntry) -> anyhow::Result<()> {
-        // TODO: Publish asynchronously?
-        let signup_string = signup.to_string();
+    fn get_next_signup_id(&mut self) -> anyhow::Result<SignupId> {
+        self.redis
+            .incr(SIGNUP_COUNTER, 1)
+            .context("incrementing signup counter")
+    }
 
+    #[instrument(skip(self))]
+    fn attach_id_and_receipt_to_list_entry(
+        &mut self,
+        text: SignupListEntryText,
+    ) -> anyhow::Result<EntryAndReceipt> {
+        let id = self.get_next_signup_id()?;
+        let entry = SignupListEntry { id, text };
+        let receipt = SignupReceipt::gen();
+        let entry_and_receipt = EntryAndReceipt { entry, receipt };
+
+        Ok(entry_and_receipt)
+    }
+
+    #[instrument(skip(self))]
+    fn publish_signup(&mut self, entry_and_receipt: EntryAndReceipt) -> anyhow::Result<()> {
+        // TODO: Publish asynchronously?
+        let encoded_entry =
+            serde_json::to_string(&entry_and_receipt.entry).context("encoding signup entry")?;
+        let encoded_entry_and_receipt = serde_json::to_string(&entry_and_receipt)
+            .context("encoding signup entry and receipt")?;
+
+        redis::cmd("MULTI").query(&mut self.redis)?;
         let tx = || -> anyhow::Result<()> {
             // Publish
-            self.redis.rpush(SIGNUP_LIST, signup_string.clone())?;
-            self.redis.publish(SIGNUP_TOPIC, signup_string)?;
+            self.redis.rpush(SIGNUP_LIST, encoded_entry_and_receipt)?;
+            self.redis.publish(SIGNUP_TOPIC, encoded_entry)?;
 
             Ok(())
         };
@@ -184,25 +224,18 @@ impl SignupListActor {
 
     #[instrument(skip(self))]
     fn get_list(&mut self) -> anyhow::Result<SignupList> {
-        let list: Vec<String> = self.redis.lrange(SIGNUP_LIST, 0, -1)?;
+        let encoded_list: Vec<String> = self.redis.lrange(SIGNUP_LIST, 0, -1)?;
 
-        Ok(list.into())
-    }
-}
+        let entries_res: Result<Vec<_>, _> = encoded_list
+            .into_iter()
+            .map(|encoded| serde_json::from_str(&encoded))
+            .collect();
 
-/// An entry on the signup list.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct SignupListEntry(String);
+        let list = entries_res
+            .context("decoding signup list entries")
+            .map(SignupList)?;
 
-impl ToString for SignupListEntry {
-    fn to_string(&self) -> String {
-        self.0.clone()
-    }
-}
-
-impl From<String> for SignupListEntry {
-    fn from(val: String) -> Self {
-        Self(val)
+        Ok(list)
     }
 }
 
@@ -220,7 +253,7 @@ where
     }
 }
 
-impl Actor for SignupListActor {
+impl Actor for ListKeeper {
     type Context = Context<Self>;
 
     #[instrument(skip_all)]
