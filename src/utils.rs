@@ -143,24 +143,26 @@ pub trait LogError {
     fn log_warn(self);
 }
 
-fn log_anyhow_err(err: anyhow::Error) {
-    error!("{:?}", err);
-}
+impl LogError for anyhow::Error {
+    fn log_err(self) {
+        error!("{:?}", self);
+    }
 
-fn log_anyhow_warn(err: anyhow::Error) {
-    warn!("{:?}", err);
+    fn log_warn(self) {
+        warn!("{:?}", self);
+    }
 }
 
 impl LogError for anyhow::Result<()> {
     fn log_err(self) {
         if let Err(err) = self {
-            log_anyhow_err(err)
+            err.log_err()
         }
     }
 
     fn log_warn(self) {
         if let Err(err) = self {
-            log_anyhow_warn(err)
+            err.log_warn()
         }
     }
 }
@@ -177,11 +179,11 @@ impl<T> LogOk for anyhow::Result<T> {
     type Target = T;
 
     fn ok_log_err(self) -> Option<Self::Target> {
-        self.map_err(log_anyhow_err).ok()
+        self.map_err(LogError::log_err).ok()
     }
 
     fn ok_log_warn(self) -> Option<Self::Target> {
-        self.map_err(log_anyhow_warn).ok()
+        self.map_err(LogError::log_warn).ok()
     }
 }
 

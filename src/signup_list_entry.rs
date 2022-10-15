@@ -5,10 +5,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::signup_receipt::SignupReceipt;
 
-type SignupIdInner = usize;
+pub type SignupIdInner = usize;
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct SignupId(SignupIdInner);
+
+impl From<SignupIdInner> for SignupId {
+    fn from(inner: SignupIdInner) -> Self {
+        Self(inner)
+    }
+}
 
 impl FromRedisValue for SignupId {
     fn from_redis_value(v: &redis::Value) -> redis::RedisResult<Self> {
@@ -73,7 +79,6 @@ pub struct EntryAndReceipt {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct IdAndReceipt {
-    #[serde(flatten)]
     pub id: SignupId,
     pub receipt: SignupReceipt,
 }

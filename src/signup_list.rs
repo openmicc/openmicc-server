@@ -2,14 +2,17 @@ use std::collections::HashSet;
 
 use actix::prelude::*;
 use actix::{Actor, Context};
-use anyhow::Context as AnyhowContext;
+use anyhow::{anyhow, bail, Context as AnyhowContext};
 use redis::{Client as RedisClient, Commands, Connection as RedisConnection};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tracing::{info, instrument, warn};
 
 use crate::constants::{SIGNUP_COUNTER, SIGNUP_LIST, SIGNUP_TOPIC};
 use crate::redis_subscriber::{RedisMessage, RedisSubscriber, RedisSubscriberMessage};
-use crate::signup_list_entry::{EntryAndReceipt, SignupId, SignupListEntry, SignupListEntryText};
+use crate::signup_list_entry::{
+    EntryAndReceipt, IdAndReceipt, SignupId, SignupListEntry, SignupListEntryText,
+};
 use crate::signup_receipt::SignupReceipt;
 use crate::user_session::{SignupListCounter, SignupListMessage, UserSession};
 use crate::utils::{LogError, MyAddr, SendAndCheckResult, WrapAddr};
@@ -148,6 +151,27 @@ pub mod user_api {
             Ok(id_and_receipt)
         }
     }
+
+    /// Take my name off the list
+    #[derive(Debug, Message)]
+    #[rtype(result = "anyhow::Result<()>")]
+    pub struct TakeMeOff(pub IdAndReceipt);
+
+    impl Handler<TakeMeOff> for ListKeeper {
+        type Result = anyhow::Result<()>;
+
+        #[instrument(skip(self, _ctx))]
+        fn handle(&mut self, msg: TakeMeOff, _ctx: &mut Self::Context) -> Self::Result {
+            info!("TakeMeOff handler");
+            let id_and_receipt = msg.0;
+            // Check that the signup belongs to the user
+            let id = self.check_receipt(id_and_receipt)?;
+            info!("receipt is good.");
+            self.remove_entry(id)?;
+
+            Ok(())
+        }
+    }
 }
 
 pub struct ListKeeper {
@@ -162,9 +186,10 @@ pub struct ListKeeper {
     update_counter: SignupListCounter,
 }
 
+/// Struct Lifecycle
 impl ListKeeper {
     #[instrument]
-    fn try_new(client: RedisClient) -> anyhow::Result<Self> {
+    pub fn try_new(client: RedisClient) -> anyhow::Result<Self> {
         let redis = client.get_connection()?;
 
         let new = Self {
@@ -196,7 +221,10 @@ impl ListKeeper {
 
         Ok(entry_and_receipt)
     }
+}
 
+/// sub-CRUD(?) Operations
+impl ListKeeper {
     #[instrument(skip(self))]
     fn publish_signup(&mut self, entry_and_receipt: EntryAndReceipt) -> anyhow::Result<()> {
         // TODO: Publish asynchronously?
@@ -213,29 +241,106 @@ impl ListKeeper {
 
             Ok(())
         };
-        if let Ok(_) = tx() {
-            redis::cmd("EXEC").query(&mut self.redis)?;
-        } else {
-            redis::cmd("DISCARD").query(&mut self.redis)?;
-        }
 
-        Ok(())
+        // TODO: Split off this error handling logic
+        // into a new function?
+        match tx() {
+            Ok(_) => {
+                redis::cmd("EXEC").query(&mut self.redis)?;
+                Ok(())
+            }
+            Err(err) => {
+                redis::cmd("DISCARD").query(&mut self.redis)?;
+                Err(err)
+            }
+        }
+    }
+
+    /// Check given receipt against receipts stored in redis.
+    #[instrument(skip(self))]
+    fn check_receipt(&mut self, given: IdAndReceipt) -> anyhow::Result<SignupId> {
+        let matched = self
+            .get_list_with_receipts()?
+            .into_iter()
+            .find(|candidate| candidate.entry.id == given.id)
+            .ok_or(anyhow!("No list entry with given id {:?}", given.id))?;
+
+        if matched.receipt == given.receipt {
+            Ok(matched.entry.id)
+        } else {
+            bail!(
+                "A forged receipt, eh? ({:?} != {:?})",
+                matched.receipt,
+                given.receipt
+            )
+        }
+    }
+
+    /// No receipts
+    #[instrument(skip(self))]
+    fn get_list(&mut self) -> anyhow::Result<SignupList> {
+        self.get_list_as().map(SignupList)
+    }
+
+    /// With receipts
+    #[instrument(skip(self))]
+    fn get_list_with_receipts(&mut self) -> anyhow::Result<Vec<EntryAndReceipt>> {
+        self.get_list_as()
     }
 
     #[instrument(skip(self))]
-    fn get_list(&mut self) -> anyhow::Result<SignupList> {
-        let encoded_list: Vec<String> = self.redis.lrange(SIGNUP_LIST, 0, -1)?;
+    fn get_list_as<T: DeserializeOwned>(&mut self) -> anyhow::Result<Vec<T>> {
+        get_list_as(&mut self.redis)
+    }
 
-        let entries_res: Result<Vec<_>, _> = encoded_list
-            .into_iter()
-            .map(|encoded| serde_json::from_str(&encoded))
-            .collect();
+    #[instrument(skip(self))]
+    fn remove_entry(&mut self, id: SignupId) -> anyhow::Result<()> {
+        // TODO: Could probably be implemented more efficiently
 
-        let list = entries_res
-            .context("decoding signup list entries")
-            .map(SignupList)?;
+        let tx_res = redis::transaction(&mut self.redis, &[SIGNUP_LIST], |conn, pipe| {
+            let mut inner = || -> anyhow::Result<()> {
+                let raw_list: Vec<String> = get_raw_list(conn).context("getting raw list")?;
+                let deserialized_list: Vec<SignupListEntry> =
+                    deserialize_list(&raw_list).context("deserializing raw list")?;
 
-        Ok(list)
+                let index = deserialized_list
+                    .into_iter()
+                    .enumerate()
+                    .find(|candidate| candidate.1.id == id)
+                    .map(|(i, _)| i)
+                    .ok_or(anyhow!("No list entry with id {:?} to remove", id))?;
+
+                // Redis insists that we remove list items by value, not index
+                let value = raw_list
+                    .get(index)
+                    .ok_or(anyhow!("index issue in remove_entry?"))?;
+
+                // NOTE: This might behave unexpectedly if there are
+                // identical duplicate entries in the list for any reason
+                // (there shouldn't be)
+                pipe.lrem(SIGNUP_LIST, 1, value);
+
+                // TODO publish update for subscribers after removing
+
+                Ok(())
+            };
+            //
+
+            if let Err(err) = inner() {
+                // NOTE: If there is an error constructing the pipeline,
+                // the caller will _NOT_ be notified (but it will be logged)
+                err.log_err();
+                pipe.clear();
+            }
+
+            pipe.query(conn)
+        });
+
+        let _unit: () = tx_res?;
+
+        // TODO: Return value should indicate whether
+        // the transaction succeeded.
+        Ok(())
     }
 }
 
@@ -250,6 +355,12 @@ where
 {
     fn from(vals: L) -> Self {
         Self(vals.into_iter().map(Into::into).collect())
+    }
+}
+
+impl SignupList {
+    pub fn into_iter(self) -> impl Iterator<Item = SignupListEntry> {
+        self.0.into_iter()
     }
 }
 
@@ -279,4 +390,27 @@ impl Actor for ListKeeper {
     fn stopped(&mut self, _ctx: &mut Self::Context) {
         info!("Stop signup list");
     }
+}
+
+#[instrument(skip(conn))]
+fn get_raw_list(conn: &mut RedisConnection) -> anyhow::Result<Vec<String>> {
+    let result = conn.lrange(SIGNUP_LIST, 0, -1);
+    let encoded_list: Vec<String> = result?;
+
+    Ok(encoded_list)
+}
+
+fn deserialize_list<T: DeserializeOwned>(raw_list: &Vec<String>) -> serde_json::Result<Vec<T>> {
+    raw_list
+        .iter()
+        .map(|encoded| serde_json::from_str(encoded))
+        .collect()
+}
+
+#[instrument(skip(conn))]
+fn get_list_as<T: DeserializeOwned>(conn: &mut RedisConnection) -> anyhow::Result<Vec<T>> {
+    let raw_list = get_raw_list(conn)?;
+    let list = deserialize_list(&raw_list)?;
+
+    Ok(list)
 }

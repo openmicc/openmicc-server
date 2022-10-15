@@ -9,11 +9,11 @@ use tracing::{error, info, info_span, instrument, warn};
 use tracing_actix::ActorInstrument;
 
 use crate::greeter::{AddressBook, Greeter, GreeterMessage, OnboardingChecklist, OnboardingTask};
-use crate::signup_list::user_api::{GetList, SignMeUp, Subscribe, Unsubscribe};
+use crate::signup_list::user_api::{GetList, SignMeUp, Subscribe, TakeMeOff, Unsubscribe};
 use crate::signup_list::{ListKeeper, SignupList};
 use crate::signup_list_entry::{IdAndReceipt, SignupId, SignupListEntry, SignupListEntryText};
 use crate::signup_receipt::SignupReceipt;
-use crate::utils::{LogError, LogOk, MyAddr, SendAndCheckResponse, WrapAddr};
+use crate::utils::{LogError, LogOk, MyAddr, SendAndCheckResponse, SendAndCheckResult, WrapAddr};
 
 type SignupListCounterInner = usize;
 
@@ -47,6 +47,8 @@ pub enum ClientMessage {
     GetList,
     /// Sign me up.
     SignMeUp(SignupListEntryText),
+    /// Take me off the list.
+    TakeMeOff(IdAndReceipt),
     // TODO: ImReady (I'm ready to perform)
 }
 
@@ -239,6 +241,39 @@ impl UserSession {
         }
 
         Ok(())
+    }
+
+    #[instrument(skip(ctx))]
+    fn cancel_signup(
+        &mut self,
+        ctx: &mut <Self as Actor>::Context,
+        id_and_receipt: IdAndReceipt,
+    ) -> anyhow::Result<()> {
+        match &self.state {
+            State::Fresh => bail!("cannot get signup list before onboarding"),
+            // TODO: refactor state
+            State::Onboarding { addrs } => {
+                let dest = addrs.signup_list.clone();
+                self.cancel_signup_inner(ctx, id_and_receipt, dest);
+            }
+            State::Onboarded { addrs } => {
+                let dest = addrs.signup_list.clone();
+                self.cancel_signup_inner(ctx, id_and_receipt, dest);
+            }
+        }
+
+        Ok(())
+    }
+
+    #[instrument(skip(ctx))]
+    fn cancel_signup_inner(
+        &mut self,
+        ctx: &mut <Self as Actor>::Context,
+        id_and_receipt: IdAndReceipt,
+        signup_list: MyAddr<ListKeeper>,
+    ) {
+        let cancel_msg = TakeMeOff(id_and_receipt);
+        self.send_and_check_result(ctx, signup_list, cancel_msg);
     }
 
     #[instrument(skip(ctx))]
@@ -445,6 +480,11 @@ impl Handler<ClientMessage> for UserSession {
             ClientMessage::GetList => {
                 self.get_signup_list(ctx)
                     .context("getting signup list")
+                    .log_err();
+            }
+            ClientMessage::TakeMeOff(id_and_receipt) => {
+                self.cancel_signup(ctx, id_and_receipt)
+                    .context("cancelling signup")
                     .log_err();
             }
         }
