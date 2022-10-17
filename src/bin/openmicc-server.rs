@@ -1,6 +1,8 @@
 use anyhow::Context;
 use clap::Parser;
 use mediasoup::{
+    router::RouterOptions,
+    rtp_parameters::RtpCodecCapability,
     worker::{Worker, WorkerLogLevel, WorkerLogTag, WorkerSettings},
     worker_manager::WorkerManager,
 };
@@ -8,7 +10,7 @@ use openmicc_server::{
     greeter::{start_greeter, AddressBook},
     http_server::{run_http_server, AppData},
     signup_list::start_signup_list,
-    stage::{start_stage, Stage},
+    stage::start_stage,
     utils::WrapAddr,
 };
 use redis::Client as RedisClient;
@@ -45,8 +47,17 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("creating worker")?;
 
+    let codecs = media_codecs();
+    let router_options = RouterOptions::new(codecs);
+    let router = worker
+        .create_router(router_options)
+        .await
+        .context("creating router")?;
+
+    let router_rtp_capabilities = router.rtp_capabilities().clone();
+
     info!("Creating stage");
-    let stage = start_stage(&worker).await.context("creating stage")?;
+    let stage = start_stage(router).await.context("creating stage")?;
     info!("Stage created");
 
     // Create greeter
@@ -90,4 +101,35 @@ async fn create_worker(manager: &WorkerManager) -> anyhow::Result<Worker> {
         .context("create_worker")?;
 
     Ok(worker)
+}
+
+fn media_codecs() -> Vec<RtpCodecCapability> {
+    use mediasoup::rtp_parameters::{
+        MimeTypeAudio, MimeTypeVideo, RtcpFeedback, RtpCodecParametersParameters,
+    };
+    use std::num::{NonZeroU32, NonZeroU8};
+
+    vec![
+        RtpCodecCapability::Audio {
+            mime_type: MimeTypeAudio::Opus,
+            preferred_payload_type: None,
+            clock_rate: NonZeroU32::new(48000).unwrap(),
+            channels: NonZeroU8::new(2).unwrap(),
+            parameters: RtpCodecParametersParameters::from([("useinbandfec", 1_u32.into())]),
+            rtcp_feedback: vec![RtcpFeedback::TransportCc],
+        },
+        RtpCodecCapability::Video {
+            mime_type: MimeTypeVideo::Vp8,
+            preferred_payload_type: None,
+            clock_rate: NonZeroU32::new(90000).unwrap(),
+            parameters: RtpCodecParametersParameters::default(),
+            rtcp_feedback: vec![
+                RtcpFeedback::Nack,
+                RtcpFeedback::NackPli,
+                RtcpFeedback::CcmFir,
+                RtcpFeedback::GoogRemb,
+                RtcpFeedback::TransportCc,
+            ],
+        },
+    ]
 }
