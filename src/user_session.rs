@@ -15,7 +15,8 @@ use crate::signup_list::{ListKeeper, SignupList};
 use crate::signup_list_entry::{IdAndReceipt, SignupId, SignupListEntry, SignupListEntryText};
 use crate::signup_receipt::SignupReceipt;
 use crate::stage::messages::incoming::Perform;
-use crate::stage::Stage;
+use crate::stage::messages::outgoing::{ViewParams, YourTurn};
+use crate::stage::TransportOptions;
 use crate::utils::{LogError, LogOk, MyAddr, SendAndCheckResponse, SendAndCheckResult, WrapAddr};
 
 type SignupListCounterInner = usize;
@@ -104,6 +105,16 @@ pub enum ServerMessage {
         id: SignupId,
         receipt: SignupReceipt,
     }, // TODO: AreYouReady (ready to perform?)
+
+    /// The user can now start watching.
+    StartWatching {
+        consumer_transport_options: TransportOptions,
+    },
+
+    /// The user can now start performing.
+    StartPerforming {
+        producer_transport_options: TransportOptions,
+    },
 }
 
 /// A message from the SignupListActor to the UserSession
@@ -143,8 +154,6 @@ pub struct UserSession {
     onboarded: bool,
     /// Address book from the Greeter
     addrs: Option<AddressBook>,
-    /// User's RTP parameters
-    rtp_parameters: Option<RtpParameters>,
 }
 
 impl UserSession {
@@ -154,7 +163,6 @@ impl UserSession {
             greeter_addr,
             onboarded: Default::default(),
             addrs: Default::default(),
-            rtp_parameters: Default::default(),
         }
     }
 
@@ -304,7 +312,11 @@ impl UserSession {
         let stage = addrs.stage.clone();
 
         let rtp_parameters = params.rtp_parameters;
-        let perform_msg = Perform { rtp_parameters };
+        let addr = ctx.address().wrap();
+        let perform_msg = Perform {
+            rtp_parameters,
+            addr,
+        };
         self.send_and_check_response(ctx, stage, perform_msg);
 
         Ok(())
@@ -504,5 +516,29 @@ impl Handler<WelcomeMessage> for UserSession {
             // Get signup list right after onboarding
             self.get_signup_list(ctx).log_err();
         }
+    }
+}
+
+// Handlers for messages from stage
+
+impl Handler<ViewParams> for UserSession {
+    type Result = ();
+
+    fn handle(&mut self, msg: ViewParams, ctx: &mut Self::Context) -> Self::Result {
+        let server_msg = ServerMessage::StartWatching {
+            consumer_transport_options: msg.consumer_transport_options,
+        };
+        self.send_msg(ctx, server_msg).log_err();
+    }
+}
+
+impl Handler<YourTurn> for UserSession {
+    type Result = ();
+
+    fn handle(&mut self, msg: YourTurn, ctx: &mut Self::Context) -> Self::Result {
+        let server_msg = ServerMessage::StartPerforming {
+            producer_transport_options: msg.producer_transport_options,
+        };
+        self.send_msg(ctx, server_msg).log_err();
     }
 }

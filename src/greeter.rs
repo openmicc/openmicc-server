@@ -1,6 +1,7 @@
 use std::fmt::Debug;
 
 use actix::{Actor, Context, Handler, Message};
+use mediasoup::rtp_parameters::RtpCapabilitiesFinalized;
 use tracing::{info, instrument};
 
 use crate::{
@@ -41,6 +42,12 @@ impl IntoIterator for OnboardingChecklist {
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
     }
+}
+
+/// Info that the Greeter has for new users
+#[derive(Debug, Clone)]
+pub struct GreeterInfo {
+    pub router_rtp_capabilities: RtpCapabilitiesFinalized,
 }
 
 #[derive(Debug)]
@@ -99,7 +106,6 @@ impl Handler<GreeterMessage> for Greeter {
 }
 
 #[instrument]
-pub fn start_greeter(addrs: AddressBook) -> MyAddr<Greeter> {
-    let greeter = Greeter::new(addrs);
-    greeter.start().wrap()
+pub fn start_greeter(addrs: AddressBook, info: GreeterInfo) -> MyAddr<Greeter> {
+    Greeter::new(addrs).start().wrap()
 }

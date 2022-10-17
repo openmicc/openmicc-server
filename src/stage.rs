@@ -12,6 +12,7 @@ use mediasoup::{
     transport::TransportId,
     webrtc_transport::{TransportListenIps, WebRtcTransport, WebRtcTransportOptions},
 };
+use serde::{Deserialize, Serialize};
 use tracing::{info, instrument};
 
 use crate::utils::{MyAddr, WrapAddr};
@@ -21,8 +22,8 @@ use crate::utils::{MyAddr, WrapAddr};
 // stage broadcasts last person to connect.
 // When a new producer joins, previous one is killed.
 
-#[derive(Debug)]
-struct TransportOptions {
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TransportOptions {
     id: TransportId,
     dtls_parameters: DtlsParameters,
     ice_candidates: Vec<IceCandidate>,
@@ -38,10 +39,10 @@ pub mod messages {
 
         /// To user: It's your turn to be on stage.
         /// Allows them to begin streaming to a producer.
-        #[derive(Message)]
+        #[derive(Debug, Message)]
         #[rtype(result = "()")]
         pub struct YourTurn {
-            producer_transport_options: TransportOptions,
+            pub producer_transport_options: TransportOptions,
         }
 
         /// To user: Here's how to watch the show.
@@ -49,12 +50,14 @@ pub mod messages {
         #[derive(Debug, Message)]
         #[rtype(result = "()")]
         pub struct ViewParams {
-            consumer_transport_options: TransportOptions,
+            pub consumer_transport_options: TransportOptions,
         }
     }
 
     pub mod incoming {
         use mediasoup::rtp_parameters::{RtpCapabilities, RtpParameters};
+
+        use crate::user_session::UserSession;
 
         use super::*;
 
@@ -62,15 +65,22 @@ pub mod messages {
         #[derive(Debug, Message)]
         #[rtype(result = "()")]
         pub struct Perform {
+            /// User's RTP parameters
             pub rtp_parameters: RtpParameters,
+            /// User's actor address to reply to
+            pub addr: MyAddr<UserSession>,
         }
 
         /// From user: I want to watch the stage.
         #[derive(Debug, Message)]
         #[rtype(result = "anyhow::Result<()>")]
         pub struct Observe {
+            /// User's dTLS parameters
             pub dtls_parameters: DtlsParameters,
+            /// User's RTP capabilities
             pub rtp_capabilities: RtpCapabilities,
+            /// User's actor address to reply to
+            pub addr: MyAddr<UserSession>,
         }
     }
 
@@ -84,9 +94,10 @@ pub mod messages {
         use tracing::{info_span, warn};
         use tracing_actix::ActorInstrument;
 
-        use crate::utils::LogOk;
+        use crate::utils::{LogOk, SendAndCheckResponse};
 
         use super::incoming::{Observe, Perform};
+        use super::outgoing::{ViewParams, YourTurn};
         use super::*;
 
         impl Handler<Perform> for Stage {
@@ -94,10 +105,8 @@ pub mod messages {
 
             #[instrument(skip(self, ctx))]
             fn handle(&mut self, msg: Perform, ctx: &mut Self::Context) -> Self::Result {
-                warn!("Original router id: {}", self.router.id());
+                let reply_addr = msg.addr;
                 let router = self.router.clone();
-                warn!("Cloned router id: {}", router.id());
-
                 let transport_options = self.transport_options.clone();
 
                 let pair_res_fut = async move {
@@ -124,9 +133,22 @@ pub mod messages {
 
                 let span = info_span!("follow-up: save producer");
                 let actor_fut = pair_res_fut.into_actor(self).actor_instrument(span);
-                let do_later = actor_fut.map(|pair_res, act, _ctx| {
+                let do_later = actor_fut.map(|pair_res, act, ctx| {
                     if let Some(pair) = pair_res.ok_log_err() {
+                        let producer_transport_options = TransportOptions {
+                            id: pair.transport.id(),
+                            dtls_parameters: pair.transport.dtls_parameters(),
+                            ice_candidates: pair.transport.ice_candidates().clone(),
+                            ice_parameters: pair.transport.ice_parameters().clone(),
+                        };
+
+                        // Save producer & transport for later
                         act.producer.replace(pair);
+
+                        let msg = YourTurn {
+                            producer_transport_options,
+                        };
+                        act.send_and_check_response(ctx, reply_addr, msg)
                     }
 
                     info!("Saved producer!");
@@ -141,6 +163,7 @@ pub mod messages {
 
             #[instrument(skip(self, ctx))]
             fn handle(&mut self, msg: Observe, ctx: &mut Self::Context) -> Self::Result {
+                let reply_addr = msg.addr;
                 let router = self.router.clone();
                 let transport_options = self.transport_options.clone();
                 let producer_id = self
@@ -172,13 +195,25 @@ pub mod messages {
 
                 let span = info_span!("follow-up: save producer");
                 let actor_fut = pair_res_fut.into_actor(self).actor_instrument(span);
-                let do_later = actor_fut.map(|pair_res, act, _ctx| {
+                let do_later = actor_fut.map(|pair_res, act, ctx| {
                     if let Some(pair) = pair_res.ok_log_err() {
+                        let consumer_transport_options = TransportOptions {
+                            id: pair.transport.id(),
+                            dtls_parameters: pair.transport.dtls_parameters(),
+                            ice_candidates: pair.transport.ice_candidates().clone(),
+                            ice_parameters: pair.transport.ice_parameters().clone(),
+                        };
+
                         let id = pair.consumer.id();
                         act.consumers.insert(id, pair);
-                    }
 
-                    info!("Saved producer!");
+                        info!("Saved producer!");
+
+                        let msg = ViewParams {
+                            consumer_transport_options,
+                        };
+                        act.send_and_check_response(ctx, reply_addr, msg)
+                    }
                 });
 
                 ctx.spawn(do_later);

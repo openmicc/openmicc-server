@@ -7,11 +7,10 @@ use mediasoup::{
     worker_manager::WorkerManager,
 };
 use openmicc_server::{
-    greeter::{start_greeter, AddressBook},
+    greeter::{start_greeter, AddressBook, GreeterInfo},
     http_server::{run_http_server, AppData},
     signup_list::start_signup_list,
     stage::start_stage,
-    utils::WrapAddr,
 };
 use redis::Client as RedisClient;
 use tracing::info;
@@ -62,7 +61,10 @@ async fn main() -> anyhow::Result<()> {
 
     // Create greeter
     let addrs = AddressBook { signup_list, stage };
-    let greeter_addr = start_greeter(addrs);
+    let info = GreeterInfo {
+        router_rtp_capabilities,
+    };
+    let greeter_addr = start_greeter(addrs, info);
 
     // Run HTTP server
     let app_data = AppData {
