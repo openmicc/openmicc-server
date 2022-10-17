@@ -27,8 +27,14 @@ RUN cargo build
 
 # Then build the app
 COPY . .
-# RUN cargo check
-RUN cargo build
+
+# # RUN cargo check
+# RUN cargo build
+
+RUN cargo install cargo-watch bacon
+RUN apt-get install -y tmux
+
+ENV PATH="${PATH}:/usr/local/cargo/bin"
 
 # TODO: Producition builds
 CMD ["./target/debug/openmicc-server", "8000"]
