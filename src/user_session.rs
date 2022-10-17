@@ -74,9 +74,13 @@ pub enum ClientMessage {
 pub enum ServerMessage {
     // TODO: Pop from list (after finishing)
     // TODO: Remove person from list (dropped out early)
-    // The whole current sign-up list.
-    // SignupList(SignupList),
+    #[serde(rename_all = "camelCase")]
+    Welcome {
+        router_rtp_capabilities: RtpCapabilitiesFinalized,
+    },
+
     /// A notification of a new sign-up.
+    #[serde(rename_all = "camelCase")]
     NewSignup {
         /// The new list entry
         entry: SignupListEntry,
@@ -87,6 +91,7 @@ pub enum ServerMessage {
     },
 
     /// An entry has been deleted from the sign-up list.
+    #[serde(rename_all = "camelCase")]
     ListRemoval {
         /// The id of the removed entry
         id: SignupId,
@@ -97,20 +102,24 @@ pub enum ServerMessage {
     },
 
     /// A snapshot of the whole current sign-up list.
+    #[serde(rename_all = "camelCase")]
     WholeSignupList(SignupList),
 
     /// The user has successfully signed up and obtained a receipt.
+    #[serde(rename_all = "camelCase")]
     SignupSuccess {
         id: SignupId,
         receipt: SignupReceipt,
     }, // TODO: AreYouReady (ready to perform?)
 
     /// The user can now start watching.
+    #[serde(rename_all = "camelCase")]
     StartWatching {
         consumer_transport_options: TransportOptions,
     },
 
     /// The user can now start performing.
+    #[serde(rename_all = "camelCase")]
     StartPerforming {
         producer_transport_options: TransportOptions,
     },

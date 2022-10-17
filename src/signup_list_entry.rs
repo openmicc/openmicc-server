@@ -82,12 +82,14 @@ impl FromStr for SignupListEntryText {
 
 /// An entry on the signup list.
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SignupListEntry {
     pub id: SignupId,
     pub text: SignupListEntryText,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EntryAndReceipt {
     #[serde(flatten)]
     pub entry: SignupListEntry,
@@ -95,6 +97,7 @@ pub struct EntryAndReceipt {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct IdAndReceipt {
     pub id: SignupId,
     pub receipt: SignupReceipt,
