@@ -204,6 +204,16 @@ impl UserSession {
     }
 
     #[instrument(skip(ctx))]
+    fn get_signup_list(&self, ctx: &mut <Self as Actor>::Context) -> anyhow::Result<()> {
+        let addrs = self.addrs.as_ref().ok_or(anyhow!("no address book"))?;
+        let dest = addrs.signup_list.clone();
+
+        self.get_signup_list_inner(ctx, dest)?;
+
+        Ok(())
+    }
+
+    #[instrument(skip(ctx))]
     fn sign_me_up(
         &mut self,
         ctx: &mut <Self as Actor>::Context,
@@ -243,17 +253,6 @@ impl UserSession {
         ctx.wait(logged);
 
         // self.send_and_check_result(ctx, signup_list, signup_msg);
-
-        Ok(())
-    }
-
-    // TODO: Move above sign_me_up
-    #[instrument(skip(ctx))]
-    fn get_signup_list(&self, ctx: &mut <Self as Actor>::Context) -> anyhow::Result<()> {
-        let addrs = self.addrs.as_ref().ok_or(anyhow!("no address book"))?;
-        let dest = addrs.signup_list.clone();
-
-        self.get_signup_list_inner(ctx, dest)?;
 
         Ok(())
     }
