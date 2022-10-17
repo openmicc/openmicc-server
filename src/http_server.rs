@@ -5,6 +5,7 @@ use actix_web::{
     HttpRequest, HttpResponse, HttpServer,
 };
 use actix_web_actors::ws;
+use mediasoup::worker_manager::WorkerManager;
 use tracing::{info, instrument};
 
 use crate::greeter::Greeter;
@@ -14,6 +15,7 @@ use crate::utils::MyAddr;
 #[derive(Clone)]
 pub struct AppData {
     pub greeter_addr: MyAddr<Greeter>,
+    pub worker_manager: WorkerManager,
 }
 
 #[instrument(skip(app_data))]

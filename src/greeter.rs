@@ -5,6 +5,7 @@ use tracing::{info, instrument};
 
 use crate::{
     signup_list::ListKeeper,
+    stage::Stage,
     user_session::{UserSession, WelcomeMessage},
     utils::{MyAddr, SendAndCheckResponse, WrapAddr},
 };
@@ -45,12 +46,14 @@ impl IntoIterator for OnboardingChecklist {
 #[derive(Debug)]
 pub struct AddressBook {
     pub signup_list: MyAddr<ListKeeper>,
+    pub stage: MyAddr<Stage>,
 }
 
 impl Clone for AddressBook {
     fn clone(&self) -> Self {
         Self {
             signup_list: self.signup_list.clone(),
+            stage: self.stage.clone(),
         }
     }
 }

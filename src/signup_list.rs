@@ -65,12 +65,12 @@ impl Handler<RedisMessage> for ListKeeper {
     }
 }
 
-pub fn start_signup_list(redis: RedisClient) -> anyhow::Result<Addr<ListKeeper>> {
+pub fn start_signup_list(redis: RedisClient) -> anyhow::Result<MyAddr<ListKeeper>> {
     // TODO: actors should be able to reconnect to redis
     // (or just die & restart would be fine)
     // ((but then how do others get the new address?))
     let actor = ListKeeper::try_new(redis)?;
-    let addr = actor.start();
+    let addr = actor.start().wrap();
     Ok(addr)
 }
 
