@@ -520,6 +520,12 @@ impl Handler<WelcomeMessage> for UserSession {
                 .context("onboarding")
                 .log_err();
 
+            // Send the welcome message to the client
+            let server_msg = ServerMessage::Welcome {
+                router_rtp_capabilities: msg.router_rtp_capabilities,
+            };
+            self.send_msg(ctx, server_msg).log_err();
+
             // TODO: Should this be initiated by the client?
             // Get signup list right after onboarding
             self.get_signup_list(ctx).log_err();
