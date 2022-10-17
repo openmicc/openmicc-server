@@ -3,7 +3,8 @@ use std::ops::Deref;
 use actix::prelude::*;
 use actix::{Actor, StreamHandler};
 use actix_web_actors::ws;
-use anyhow::{bail, Context as AnyhowContext};
+use anyhow::{anyhow, bail, Context as AnyhowContext};
+use mediasoup::rtp_parameters::RtpParameters;
 use serde::{Deserialize, Serialize};
 use tracing::{error, info, info_span, instrument, warn};
 use tracing_actix::ActorInstrument;
@@ -126,29 +127,12 @@ pub struct WelcomeMessage {
 #[derive(Debug)]
 pub struct UserSession {
     greeter_addr: MyAddr<Greeter>,
-    state: State,
-}
-
-#[derive(Debug, Clone)]
-enum State {
-    /// Just connected, haven't done anything yet
-    Fresh,
-    /// We've already received the `WelcomeMessage`, but haven't finished onboarding
-    Onboarding {
-        /// Address book from the Greeter
-        addrs: AddressBook,
-    },
-    /// Finished onboarding
-    Onboarded {
-        /// Address book from the Greeter
-        addrs: AddressBook,
-    },
-}
-
-impl Default for State {
-    fn default() -> Self {
-        Self::Fresh
-    }
+    /// Whether the user has completed onboarding
+    onboarded: bool,
+    /// Address book from the Greeter
+    addrs: Option<AddressBook>,
+    /// User's RTP parameters
+    rtp_parameters: Option<RtpParameters>,
 }
 
 impl UserSession {
@@ -156,7 +140,9 @@ impl UserSession {
     pub fn new(greeter_addr: MyAddr<Greeter>) -> Self {
         Self {
             greeter_addr,
-            state: Default::default(),
+            onboarded: Default::default(),
+            addrs: Default::default(),
+            rtp_parameters: Default::default(),
         }
     }
 
@@ -203,60 +189,51 @@ impl UserSession {
         ctx: &mut <Self as Actor>::Context,
         text: SignupListEntryText,
     ) -> anyhow::Result<()> {
-        if let State::Onboarded { addrs } = &self.state {
-            let signup_msg = SignMeUp(text);
-            let signup_list = addrs.signup_list.clone();
+        let addrs = self.addrs.as_ref().ok_or(anyhow!("no address book"))?;
 
-            let receipt_res_fut = async move {
-                let receipt = signup_list
-                    .send(signup_msg)
-                    .await
-                    .context("signup list mailbox error")?
-                    .context("signup failure")?;
+        let signup_msg = SignMeUp(text);
+        let signup_list = addrs.signup_list.clone();
 
-                Ok::<_, anyhow::Error>(receipt)
-            };
+        let receipt_res_fut = async move {
+            let receipt = signup_list
+                .send(signup_msg)
+                .await
+                .context("signup list mailbox error")?
+                .context("signup failure")?;
 
-            let span = info_span!("forwarding signup receipt to client");
-            let do_later =
-                receipt_res_fut
-                    .into_actor(self)
-                    .actor_instrument(span)
-                    .map(|res, act, ctx| {
-                        let IdAndReceipt { id, receipt } = res?;
-                        let msg = ServerMessage::SignupSuccess { id, receipt };
-                        act.send_msg(ctx, msg)?;
-                        Ok(())
-                    });
+            Ok::<_, anyhow::Error>(receipt)
+        };
 
-            let logged = do_later.map(|res, _, _| {
-                res.ok_log_err();
-            });
+        let span = info_span!("forwarding signup receipt to client");
+        let do_later =
+            receipt_res_fut
+                .into_actor(self)
+                .actor_instrument(span)
+                .map(|res, act, ctx| {
+                    let IdAndReceipt { id, receipt } = res?;
+                    let msg = ServerMessage::SignupSuccess { id, receipt };
+                    act.send_msg(ctx, msg)?;
+                    Ok(())
+                });
 
-            ctx.wait(logged);
+        let logged = do_later.map(|res, _, _| {
+            res.ok_log_err();
+        });
 
-            // self.send_and_check_result(ctx, signup_list, signup_msg);
-        } else {
-            bail!("can only sign up after onboarding");
-        }
+        ctx.wait(logged);
+
+        // self.send_and_check_result(ctx, signup_list, signup_msg);
 
         Ok(())
     }
 
+    // TODO: Move above sign_me_up
     #[instrument(skip(ctx))]
     fn get_signup_list(&self, ctx: &mut <Self as Actor>::Context) -> anyhow::Result<()> {
-        match &self.state {
-            State::Fresh => bail!("cannot get signup list before onboarding"),
-            // TODO: refactor state
-            State::Onboarding { addrs } => {
-                let dest = addrs.signup_list.clone();
-                self.get_signup_list_inner(ctx, dest)?;
-            }
-            State::Onboarded { addrs } => {
-                let dest = addrs.signup_list.clone();
-                self.get_signup_list_inner(ctx, dest)?;
-            }
-        }
+        let addrs = self.addrs.as_ref().ok_or(anyhow!("no address book"))?;
+        let dest = addrs.signup_list.clone();
+
+        self.get_signup_list_inner(ctx, dest)?;
 
         Ok(())
     }
@@ -267,31 +244,13 @@ impl UserSession {
         ctx: &mut <Self as Actor>::Context,
         id_and_receipt: IdAndReceipt,
     ) -> anyhow::Result<()> {
-        match &self.state {
-            State::Fresh => bail!("cannot get signup list before onboarding"),
-            // TODO: refactor state
-            State::Onboarding { addrs } => {
-                let dest = addrs.signup_list.clone();
-                self.cancel_signup_inner(ctx, id_and_receipt, dest);
-            }
-            State::Onboarded { addrs } => {
-                let dest = addrs.signup_list.clone();
-                self.cancel_signup_inner(ctx, id_and_receipt, dest);
-            }
-        }
+        let addrs = self.addrs.as_ref().ok_or(anyhow!("no address book"))?;
+        let signup_list = addrs.signup_list.clone();
 
-        Ok(())
-    }
-
-    #[instrument(skip(ctx))]
-    fn cancel_signup_inner(
-        &mut self,
-        ctx: &mut <Self as Actor>::Context,
-        id_and_receipt: IdAndReceipt,
-        signup_list: MyAddr<ListKeeper>,
-    ) {
         let cancel_msg = TakeMeOff(id_and_receipt);
         self.send_and_check_result(ctx, signup_list, cancel_msg);
+
+        Ok(())
     }
 
     #[instrument(skip(ctx))]
@@ -299,15 +258,12 @@ impl UserSession {
         &mut self,
         ctx: &mut <Self as Actor>::Context,
     ) -> anyhow::Result<()> {
-        if let State::Onboarding { addrs } = &self.state {
-            let my_addr = ctx.address().wrap();
-            let subscribe_msg = Subscribe(my_addr);
-            let signup_list = addrs.signup_list.clone();
-            self.send_and_check_response(ctx, signup_list, subscribe_msg);
-        } else {
-            // TODO: Remove this unnecessary restriction by refactoring state?
-            bail!("can only subscribe to signup list during onboarding");
-        }
+        let addrs = self.addrs.as_ref().ok_or(anyhow!("no address book"))?;
+        let signup_list = addrs.signup_list.clone();
+        let my_addr = ctx.address().wrap();
+
+        let subscribe_msg = Subscribe(my_addr);
+        self.send_and_check_response(ctx, signup_list, subscribe_msg);
 
         Ok(())
     }
@@ -317,15 +273,12 @@ impl UserSession {
         &mut self,
         ctx: &mut <Self as Actor>::Context,
     ) -> anyhow::Result<()> {
-        if let State::Onboarded { addrs } = &self.state {
-            let my_addr = ctx.address().wrap();
-            let unsubscribe_msg = Unsubscribe(my_addr);
-            let signup_list = addrs.signup_list.clone();
-            self.send_and_check_response(ctx, signup_list, unsubscribe_msg);
-        } else {
-            // TODO: Remove this unnecessary restriction by refactoring state?
-            bail!("can only unsubscribe to signup list after onboarding");
-        }
+        let addrs = self.addrs.as_ref().ok_or(anyhow!("no address book"))?;
+        let signup_list = addrs.signup_list.clone();
+        let my_addr = ctx.address().wrap();
+
+        let unsubscribe_msg = Unsubscribe(my_addr);
+        self.send_and_check_response(ctx, signup_list, unsubscribe_msg);
 
         Ok(())
     }
@@ -347,23 +300,20 @@ impl UserSession {
         ctx: &mut <Self as Actor>::Context,
         checklist: OnboardingChecklist,
     ) -> anyhow::Result<()> {
-        match &self.state {
-            State::Onboarding { addrs } => {
-                let cloned_addrs = addrs.clone();
-                for task in checklist {
-                    self.do_onboarding_task(ctx, task)
-                        .context("onboarding task")
-                        .log_err();
-                }
-
-                self.state = State::Onboarded {
-                    addrs: cloned_addrs,
-                };
-
-                info!("User finished onboarding");
-            }
-            _ => bail!("Can only onboard in Onboarding state"),
+        if self.onboarded {
+            bail!("already onboarded");
         }
+
+        for task in checklist {
+            self.do_onboarding_task(ctx, task)
+                .context("onboarding task")
+                .log_err();
+        }
+
+        // yay
+        self.onboarded = true;
+
+        info!("User finished onboarding");
 
         Ok(())
     }
@@ -421,14 +371,6 @@ impl Handler<SignupListMessage> for UserSession {
 
     #[instrument(skip(ctx), name = "SignupListMessageHandler")]
     fn handle(&mut self, msg: SignupListMessage, ctx: &mut Self::Context) -> Self::Result {
-        info!("User got signup list message: {:?}", &msg);
-
-        if let State::Fresh = self.state {
-            bail!("wasn't expecting SignupListMessage before welcoming");
-        }
-
-        info!("made it this far");
-
         match msg {
             SignupListMessage::All { list } => {
                 // WelcomeInfo
@@ -518,18 +460,17 @@ impl Handler<WelcomeMessage> for UserSession {
 
     #[instrument(skip_all, name = "WelcomeMessageHandler")]
     fn handle(&mut self, msg: WelcomeMessage, ctx: &mut Self::Context) -> Self::Result {
-        match self.state {
-            State::Fresh => {
-                self.state = State::Onboarding { addrs: msg.addrs };
-                self.onboard(ctx, msg.checklist)
-                    .context("onboarding")
-                    .log_err();
+        if self.onboarded {
+            warn!("Already welcomed...");
+        } else {
+            self.addrs.replace(msg.addrs);
+            self.onboard(ctx, msg.checklist)
+                .context("onboarding")
+                .log_err();
 
-                // TODO: Should this be initiated by the client?
-                // Get signup list right after onboarding
-                self.get_signup_list(ctx).log_err();
-            }
-            _ => warn!("Already welcomed..."),
+            // TODO: Should this be initiated by the client?
+            // Get signup list right after onboarding
+            self.get_signup_list(ctx).log_err();
         }
     }
 }
