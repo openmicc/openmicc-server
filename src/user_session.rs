@@ -14,6 +14,8 @@ use crate::signup_list::user_api::{GetList, SignMeUp, Subscribe, TakeMeOff, Unsu
 use crate::signup_list::{ListKeeper, SignupList};
 use crate::signup_list_entry::{IdAndReceipt, SignupId, SignupListEntry, SignupListEntryText};
 use crate::signup_receipt::SignupReceipt;
+use crate::stage::messages::incoming::Perform;
+use crate::stage::Stage;
 use crate::utils::{LogError, LogOk, MyAddr, SendAndCheckResponse, SendAndCheckResult, WrapAddr};
 
 type SignupListCounterInner = usize;
@@ -279,6 +281,35 @@ impl UserSession {
 
         let unsubscribe_msg = Unsubscribe(my_addr);
         self.send_and_check_response(ctx, signup_list, unsubscribe_msg);
+
+        Ok(())
+    }
+
+    #[instrument(skip(ctx))]
+    fn start_performing_inner(
+        &mut self,
+        ctx: &mut <Self as Actor>::Context,
+        dest: MyAddr<Stage>,
+    ) -> anyhow::Result<()> {
+        let addrs = self.addrs.as_ref().ok_or(anyhow!("no addrs"))?;
+        let stage = addrs.stage.clone();
+
+        let rtp_parameters = self
+            .rtp_parameters
+            .clone()
+            .ok_or(anyhow!("no rtp parameters"))?;
+
+        let perform_msg = Perform { rtp_parameters };
+        self.send_and_check_response(ctx, stage, perform_msg);
+
+        Ok(())
+    }
+
+    fn start_performing(&mut self, ctx: &mut <Self as Actor>::Context) -> anyhow::Result<()> {
+        let addrs = self.addrs.as_ref().ok_or(anyhow!("no address book"))?;
+        let stage = addrs.stage.clone();
+
+        self.start_performing_inner(ctx, stage)?;
 
         Ok(())
     }
