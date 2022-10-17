@@ -4,7 +4,7 @@ use actix::prelude::*;
 use actix::{Actor, StreamHandler};
 use actix_web_actors::ws;
 use anyhow::{anyhow, bail, Context as AnyhowContext};
-use mediasoup::rtp_parameters::RtpParameters;
+use mediasoup::rtp_parameters::{RtpCapabilitiesFinalized, RtpParameters};
 use serde::{Deserialize, Serialize};
 use tracing::{error, info, info_span, instrument, warn};
 use tracing_actix::ActorInstrument;
@@ -144,6 +144,7 @@ pub enum SignupListMessage {
 pub struct WelcomeMessage {
     pub addrs: AddressBook,
     pub checklist: OnboardingChecklist,
+    pub router_rtp_capabilities: RtpCapabilitiesFinalized,
 }
 
 #[derive(Debug)]

@@ -67,11 +67,12 @@ impl Clone for AddressBook {
 
 pub struct Greeter {
     addrs: AddressBook,
+    info: GreeterInfo,
 }
 
 impl Greeter {
-    pub fn new(addrs: AddressBook) -> Self {
-        Self { addrs }
+    pub fn new(addrs: AddressBook, info: GreeterInfo) -> Self {
+        Self { addrs, info }
     }
 }
 
@@ -98,7 +99,11 @@ impl Handler<GreeterMessage> for Greeter {
             GreeterMessage::Hello(user) => {
                 let addrs = self.addrs.clone();
                 let checklist = OnboardingChecklist::new();
-                let welcome_msg = WelcomeMessage { addrs, checklist };
+                let welcome_msg = WelcomeMessage {
+                    addrs,
+                    checklist,
+                    router_rtp_capabilities: self.info.router_rtp_capabilities.clone(),
+                };
                 self.send_and_check_response(ctx, user, welcome_msg);
             }
         }
@@ -107,5 +112,5 @@ impl Handler<GreeterMessage> for Greeter {
 
 #[instrument]
 pub fn start_greeter(addrs: AddressBook, info: GreeterInfo) -> MyAddr<Greeter> {
-    Greeter::new(addrs).start().wrap()
+    Greeter::new(addrs, info).start().wrap()
 }
