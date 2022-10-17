@@ -40,6 +40,14 @@ impl SignupListCounter {
     }
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PerformParams {
+    pub signup_receipt: SignupReceipt,
+    // TODO: Should the rtp params be sent during init?
+    pub rtp_parameters: RtpParameters,
+}
+
 /// Sent from client to sever
 #[derive(Debug, Message, Deserialize, Serialize)]
 #[serde(tag = "type", content = "payload")]
@@ -53,6 +61,8 @@ pub enum ClientMessage {
     /// Take me off the list.
     TakeMeOff(IdAndReceipt),
     // TODO: ImReady (I'm ready to perform)
+    // I'm ready to perform.
+    ImReady(PerformParams),
 }
 
 /// Info sent to the client upon connecting to the server
@@ -285,31 +295,17 @@ impl UserSession {
         Ok(())
     }
 
-    #[instrument(skip(ctx))]
-    fn start_performing_inner(
+    fn start_performing(
         &mut self,
         ctx: &mut <Self as Actor>::Context,
-        dest: MyAddr<Stage>,
+        params: PerformParams,
     ) -> anyhow::Result<()> {
-        let addrs = self.addrs.as_ref().ok_or(anyhow!("no addrs"))?;
-        let stage = addrs.stage.clone();
-
-        let rtp_parameters = self
-            .rtp_parameters
-            .clone()
-            .ok_or(anyhow!("no rtp parameters"))?;
-
-        let perform_msg = Perform { rtp_parameters };
-        self.send_and_check_response(ctx, stage, perform_msg);
-
-        Ok(())
-    }
-
-    fn start_performing(&mut self, ctx: &mut <Self as Actor>::Context) -> anyhow::Result<()> {
         let addrs = self.addrs.as_ref().ok_or(anyhow!("no address book"))?;
         let stage = addrs.stage.clone();
 
-        self.start_performing_inner(ctx, stage)?;
+        let rtp_parameters = params.rtp_parameters;
+        let perform_msg = Perform { rtp_parameters };
+        self.send_and_check_response(ctx, stage, perform_msg);
 
         Ok(())
     }
@@ -480,6 +476,11 @@ impl Handler<ClientMessage> for UserSession {
             ClientMessage::TakeMeOff(id_and_receipt) => {
                 self.cancel_signup(ctx, id_and_receipt)
                     .context("handling ClientMessage::TakeMeOff")
+                    .log_err();
+            }
+            ClientMessage::ImReady(perform_params) => {
+                self.start_performing(ctx, perform_params)
+                    .context("handling ClientMessage::ImReady")
                     .log_err();
             }
         }
