@@ -183,7 +183,6 @@ impl UserSession {
 
         let do_later = actor_fut
             .map(|list_res: anyhow::Result<SignupList>, act, ctx| {
-                info!("Now is later. Result = {:?}", list_res);
                 let msg = ServerMessage::WholeSignupList(list_res?);
                 act.send_msg(ctx, msg)
                     .context("sending message to client")?;
