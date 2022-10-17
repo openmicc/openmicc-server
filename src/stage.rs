@@ -21,6 +21,7 @@ use crate::utils::{MyAddr, WrapAddr};
 // stage broadcasts last person to connect.
 // When a new producer joins, previous one is killed.
 
+#[derive(Debug)]
 struct TransportOptions {
     id: TransportId,
     dtls_parameters: DtlsParameters,
@@ -45,7 +46,7 @@ pub mod messages {
 
         /// To user: Here's how to watch the show.
         /// Allows them to begin streaming from a consumer.
-        #[derive(Message)]
+        #[derive(Debug, Message)]
         #[rtype(result = "()")]
         pub struct ViewParams {
             consumer_transport_options: TransportOptions,
@@ -58,14 +59,14 @@ pub mod messages {
         use super::*;
 
         /// From user: I'm ready to be on stage
-        #[derive(Message)]
+        #[derive(Debug, Message)]
         #[rtype(result = "()")]
         pub struct Perform {
             pub rtp_parameters: RtpParameters,
         }
 
         /// From user: I want to watch the stage.
-        #[derive(Message)]
+        #[derive(Debug, Message)]
         #[rtype(result = "anyhow::Result<()>")]
         pub struct Observe {
             pub dtls_parameters: DtlsParameters,
@@ -91,6 +92,7 @@ pub mod messages {
         impl Handler<Perform> for Stage {
             type Result = ();
 
+            #[instrument(skip(self, ctx))]
             fn handle(&mut self, msg: Perform, ctx: &mut Self::Context) -> Self::Result {
                 warn!("Original router id: {}", self.router.id());
                 let router = self.router.clone();
@@ -137,6 +139,7 @@ pub mod messages {
         impl Handler<Observe> for Stage {
             type Result = anyhow::Result<()>;
 
+            #[instrument(skip(self, ctx))]
             fn handle(&mut self, msg: Observe, ctx: &mut Self::Context) -> Self::Result {
                 let router = self.router.clone();
                 let transport_options = self.transport_options.clone();
