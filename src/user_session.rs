@@ -61,7 +61,6 @@ pub enum ClientMessage {
     SignMeUp(SignupListEntryText),
     /// Take me off the list.
     TakeMeOff(IdAndReceipt),
-    // TODO: ImReady (I'm ready to perform)
     // I'm ready to perform.
     ImReady(PerformParams),
 }
