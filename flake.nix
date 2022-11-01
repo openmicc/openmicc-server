@@ -21,6 +21,17 @@
           src = ./.;
         };
 
+        apps.dockerBuild = let
+          buildah = "${pkgs.buildah}/bin/buildah";
+          script = pkgs.writeShellScript "build.sh" ''
+            ${buildah} build .
+            # TODO: Tag & push
+          '';
+        in {
+          type = "app";
+          program = (pkgs.lib.traceVal script.outPath);
+        };
+
         devShell = pkgs.mkShell {
           name = "openmicc-server-shell";
           src = ./.;
