@@ -24,6 +24,10 @@
         apps.dockerBuild = let
           buildah = "${pkgs.buildah}/bin/buildah";
           script = pkgs.writeShellScript "build.sh" ''
+            set -uexo pipefail
+            pwd
+            ${pkgs.tree}/bin/tree
+            ls -lrth
             ${buildah} build .
             # TODO: Tag & push
           '';
