@@ -1,0 +1,7 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 31f508e..a65eb23 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1393,2 +1392,0 @@ version = "0.5.1"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "d692b8c851e91f0838772fbcff034bb1a9410bb92c644284cd5694ba62de973d"

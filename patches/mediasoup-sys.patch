@@ -1,0 +1,42 @@
+diff --git a/worker/Makefile b/worker/Makefile
+index bece43a5..6c677880 100644
+--- a/worker/Makefile
++++ b/worker/Makefile
+@@ -19,7 +19,7 @@ DOCKER ?= docker
+ PIP_DIR = $(MEDIASOUP_OUT_DIR)/pip
+ INSTALL_DIR ?= $(MEDIASOUP_OUT_DIR)/$(MEDIASOUP_BUILDTYPE)
+ BUILD_DIR ?= $(MEDIASOUP_OUT_DIR)/$(MEDIASOUP_BUILDTYPE)/build
+-MESON ?= $(PIP_DIR)/bin/meson
++MESON ?= meson
+ MESON_VERSION ?= 0.61.5
+ # `MESON_ARGS` can be used to provide extra configuration parameters to Meson, such as adding defines or changing
+ # optimization options. For instance, use `MESON_ARGS="-Dms_log_trace=true -Dms_log_file_line=true" npm i` to compile worker with
+@@ -38,7 +38,7 @@ ifeq ($(OS),Windows_NT)
+ 	# Windows is, of course, special.
+ 	export NINJA = $(PIP_DIR)/bin/ninja.exe
+ else
+-	export NINJA = $(PIP_DIR)/bin/ninja
++	export NINJA = ninja
+ endif
+
+ # Instruct Python where to look for modules it needs, such that `meson` actually
+@@ -64,19 +64,6 @@ endif
+ default: mediasoup-worker
+
+ meson-ninja:
+-ifeq ($(wildcard $(PIP_DIR)),)
+-	# Updated pip and setuptools are needed for meson
+-	# `--system` is not present everywhere and is only needed as workaround for
+-	# Debian-specific issue (copied from
+-	# https://github.com/gluster/gstatus/pull/33), fallback to command without
+-	# `--system` if the first one fails.
+-	$(PYTHON) -m pip install --system --target=$(PIP_DIR) pip setuptools || \
+-		$(PYTHON) -m pip install --target=$(PIP_DIR) pip setuptools || \
+-		echo "Installation failed, likely because PIP is unavailable, if you are on Debian/Ubuntu or derivative please install the python3-pip package"
+-	# Install `meson` and `ninja` using `pip` into custom location, so we don't
+-	# depend on system-wide installation.
+-	$(PYTHON) -m pip install --upgrade --target=$(PIP_DIR) $(PIP_BUILD_BINARIES) meson==$(MESON_VERSION) ninja
+-endif
+
+ setup: meson-ninja
+ # We try to call `--reconfigure` first as a workaround for this issue:
