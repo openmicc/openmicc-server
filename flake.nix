@@ -79,11 +79,27 @@
           installPhase = "cp -r . $out";
         };
 
-      in {
+      in rec {
         packages.mediasoup = patched-mediasoup;
         packages.cargoLock = patched-cargo-lock;
         packages.src = patched-src;
         packages.patched = mediasoup-wrap-patched;
+
+        packages.docker = pkgs.dockerTools.buildImage {
+          name = "openmicc-server-docker";
+          tag = "latest";
+          # Config options reference:
+          # https://github.com/moby/moby/blob/master/image/spec/v1.2.md#image-json-field-descriptions
+          config = { Cmd = [ "${defaultPackage}/bin/openmicc-server" ]; };
+          contents = with pkgs; [
+            bash # bash
+            coreutils # ls, cat, etc
+            inetutils # ip, ifconfig, etc.
+            iana-etc # /etc/protocols
+            netcat-gnu # nc
+            defaultPackage # openmicc-server
+          ];
+        };
 
         defaultPackage = rustPlatform.buildRustPackage {
           pname = "openmicc-server";
