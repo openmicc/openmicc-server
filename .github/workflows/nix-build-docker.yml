@@ -20,7 +20,7 @@ jobs:
       with:
         extra_nix_config: |
           access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
-        nix_path: nixpkgs=channel:nixpkgs-21.11
+        nix_path: nixpkgs=channel:nixos-22.05
     # Use cachix cache
     - uses: cachix/cachix-action@v11
       with:
