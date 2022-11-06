@@ -34,7 +34,7 @@ jobs:
     # - run: cachix use "$CACHIX_CACHE_NAME"
     # Login to GitHub image registry
     - name: "ghrc.io login"
-      run: skopeo login -u "$GITHUB_ACTOR" -p "$GITHUB_TOKEN" ghrc.io
+      run: skopeo login -u "$GITHUB_ACTOR" -p "${{ secrets.GITHUB_TOKEN }}" ghrc.io
     # Build the image
     - name: "docker build"
       run: nix build -L .#docker
