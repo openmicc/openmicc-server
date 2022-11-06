@@ -1,0 +1,45 @@
+name: "Nix Test"
+on:
+  pull_request:
+  push:
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: "set variables"
+      run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+    # Log in to github container registry
+    - uses: docker/login-action@v2
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    # Install Nix package manager
+    - uses: cachix/install-nix-action@v18
+      with:
+        extra_nix_config: |
+          access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+    # Use cachix cache
+    - uses: cachix/cachix-action@v11
+      with:
+        name: openmicc
+        # If you chose API tokens for write access OR if you have a private cache
+        authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+    # Install required packages for nix build & push
+    - name: "Install packages"
+      run: nix-env -iA nixpkgs.cachix nixpkgs.skopeo
+    # Set up cachix (avoid unnecessary rebuilds)
+    # - run: cachix use "$CACHIX_CACHE_NAME"
+    # Login to GitHub image registry
+    - name: "ghrc.io login"
+      run: skopeo login -u "$GITHUB_ACTOR" -p "$GITHUB_TOKEN" ghrc.io
+    # Build the image
+    - name: "docker build"
+      run: nix build -L .#docker
+    # Push image to registry
+    - name: "docker push"
+      run: skopeo copy --insecure-policy docker-archive:result "docker://ghcr.io/$GITHUB_REPOSITORY:${{ steps.vars.outputs.sha_short }}"
+    # Alias image with `latest` tag (without re-pushing all the data)
+    - name: "docker push"
+      run: skopeo copy --insecure-policy "docker://ghcr.io/$GITHUB_REPOSITORY:${{ steps.vars.outputs.sha_short }}" "docker://ghcr.io/$GITHUB_REPOSITORY:latest"
