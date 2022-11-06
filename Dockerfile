@@ -28,7 +28,7 @@ RUN cargo build
 # Then build the app
 COPY . .
 # RUN cargo check
-RUN cargo build
+RUN cargo build --release
 
 # TODO: Producition builds
-CMD ["./target/debug/openmicc-server", "8000"]
+CMD ["./target/release/openmicc-server", "8000"]
