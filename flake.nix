@@ -30,7 +30,6 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-        rustPlatform = pkgs.rustPlatform;
         craneLib = crane.lib.${system};
         patched-mediasoup = pkgs.stdenv.mkDerivation rec {
           pname = "mediasoup-patched";
@@ -80,48 +79,20 @@
         mediasoup-wrap-patched =
           patchDerivation patched-mediasoup (mkWrapPatchPhase wraps);
 
-        patched-cargo-lock = pkgs.stdenv.mkDerivation {
-          name = "patched-cargo-lock";
-          src = ./.;
-          phases = "unpackPhase patchPhase installPhase";
-          patches = [ ./patches/update-cargo-lock.patch ];
-          installPhase = "cp Cargo.lock $out";
-        };
-        patched-mediasoup-rel-path = "./patched-mediasoup-src";
-        cargo-toml-patch-lines = pkgs.writeText "cargo-toml-patch-lines.txt" ''
-          [patch.crates-io]
-          mediasoup-sys = { path = "${patched-mediasoup-rel-path}/worker" }
-        '';
-        patched-src = pkgs.stdenv.mkDerivation {
-          name = "patched-src";
-          src = ./.;
-          phases = "unpackPhase buildPhase installPhase";
-          buildPhase = ''
-            cat ${cargo-toml-patch-lines} >> Cargo.toml
-          '';
-          installPhase = "cp -r . $out";
-        };
         nocargo-pkg = nocargo.lib.${system}.mkRustPackageOrWorkspace {
           # Use cleanCargoSource to avoid rebuilds when unrelated files change
           src = craneLib.cleanCargoSource ./.;
-          # If some crates in your dependency closure require packages from nixpkgs.
-          # You can override the argument for `stdenv.mkDerivation` to add them.
-          #
-          # Popular `-sys` crates overrides are maintained in `./crates-io-override/default.nix`
-          # to make them work out-of-box. PRs are welcome.
+
           buildCrateOverrides = with pkgs; {
             # Use package id format `pkgname version (registry)` to reference a direct or transitive dependency.
             "zstd-sys 2.0.1+zstd.1.5.2 (registry+https://github.com/rust-lang/crates.io-index)" =
-              old: {
+              _old: {
                 nativeBuildInputs = [ pkg-config ];
                 propagatedBuildInputs = [ zstd ];
               };
 
-            # Use package name to reference local crates.
-            # "mypkg1" = old: { nativeBuildInputs = [ git ]; };
-
             "mediasoup-sys 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)" =
-              old: {
+              _old: {
                 src = "${mediasoup-wrap-patched}/worker";
 
                 nativeBuildInputs = with pkgs; [ meson ninja doxygen cargo ];
@@ -139,21 +110,15 @@
               };
 
             "paste 0.1.18 (registry+https://github.com/rust-lang/crates.io-index)" =
-              old: {
+              _old: {
                 procMacro = false;
               };
           };
-
-          # We use the rustc from nixpkgs by default.
-          # But you can override it, for example, with a nightly version from https://github.com/oxalica/rust-overlay
-          # rustc = rust-overlay.packages.${system}.rust-nightly_2022-07-01;
         };
 
       in rec {
-        packages.mediasoup = patched-mediasoup;
-        packages.cargoLock = patched-cargo-lock;
-        packages.src = patched-src;
-        packages.patched = mediasoup-wrap-patched;
+        packages.default = nocargo-pkg.release.openmicc-server.bin;
+        defaultPackage = packages.default;
 
         packages.docker = pkgs.dockerTools.buildImage {
           name = "openmicc-server-docker";
@@ -173,44 +138,6 @@
             ];
             pathsToLink = [ "/bin" ];
           };
-        };
-
-        packages.nocargo = nocargo-pkg.release.openmicc-server.bin;
-
-        packages.default = packages.nocargo;
-        defaultPackage = packages.default;
-
-        packages.rustPackage = rustPlatform.buildRustPackage {
-          pname = "openmicc-server";
-          version = "0.1.0";
-
-          nativeBuildInputs = with pkgs; [ lld pkgconfig udev meson ninja ];
-
-          buildInputs = with pkgs; [ openssl zstd ];
-
-          dontUseNinjaBuild = true;
-          dontUseNinjaCheck = true;
-          dontUseNinjaInstall = true;
-
-          cargoLock = { lockFile = patched-cargo-lock; };
-          # cargoLock = { lockFile = ./Cargo.lock; };
-
-          postPatch = ''
-            cp ${patched-cargo-lock} Cargo.lock
-          '';
-
-          buildType = "debug";
-          doCheck = false;
-
-          preBuild = ''
-            cp -r ${mediasoup-wrap-patched} ${patched-mediasoup-rel-path}
-            chmod u+w -R ${patched-mediasoup-rel-path}
-            # chmod u+w -R ${patched-src}
-          '';
-
-          # # patches = [ cargo-toml-patch ];
-
-          src = patched-src;
         };
 
         devShell = pkgs.mkShell {
