@@ -32,6 +32,8 @@ fn init_tracing() {
 
 #[actix_web::main]
 async fn main() -> anyhow::Result<()> {
+    info!("Starting.");
+
     // Initialize
     init_tracing();
     let opts = Opts::parse();
