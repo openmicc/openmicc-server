@@ -1577,7 +1577,6 @@ dependencies = [
  "hex",
  "log_err",
  "mediasoup",
- "mediasoup-sys",
  "rand 0.8.5",
  "redis",
  "rustyline",

@@ -2,8 +2,13 @@
   inputs = {
     nixpkgs.url = "nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+
+    crane.url = "github:ipetkov/crane";
+    crane.inputs.nixpkgs.follows = "nixpkgs";
+
     nocargo = {
       url = "github:oxalica/nocargo";
+      # url = "/home/oliver/local/src/nocargo";
       inputs.nixpkgs.follows = "nixpkgs";
 
       # See below.
@@ -21,11 +26,12 @@
     };
   };
 
-  outputs = { self, nixpkgs, flake-utils, nocargo, registry-crates-io }:
+  outputs = { self, nixpkgs, flake-utils, crane, nocargo, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
         rustPlatform = pkgs.rustPlatform;
+        craneLib = crane.lib.${system};
         patched-mediasoup = pkgs.stdenv.mkDerivation rec {
           pname = "mediasoup-patched";
           version = "rust-0.11.1";
@@ -96,40 +102,47 @@
           installPhase = "cp -r . $out";
         };
         nocargo-pkg = nocargo.lib.${system}.mkRustPackageOrWorkspace {
-          # The root directory, which contains `Cargo.lock` and top-level `Cargo.toml`
-          # (the one containing `[workspace]` for workspace).
-          src = ./.;
-
-          # If you use registries other than crates.io, they should be imported in flake inputs,
-          # and specified here. Note that registry should be initialized via `mkIndex`,
-          # with an optional override.
-          extraRegistries = {
-            # "https://example-registry.org" = nocargo.lib.${system}.mkIndex inputs.example-registry {};
-          };
-
-          # If you use crates from git URLs, they should be imported in flake inputs,
-          # and specified here.
-          gitSrcs = {
-            # "https://github.com/some/repo" = inputs.example-git-source;
-          };
-
+          # Use cleanCargoSource to avoid rebuilds when unrelated files change
+          src = craneLib.cleanCargoSource ./.;
           # If some crates in your dependency closure require packages from nixpkgs.
           # You can override the argument for `stdenv.mkDerivation` to add them.
           #
           # Popular `-sys` crates overrides are maintained in `./crates-io-override/default.nix`
           # to make them work out-of-box. PRs are welcome.
-          buildCrateOverrides = with pkgs;
-            {
-              # Use package id format `pkgname version (registry)` to reference a direct or transitive dependency.
-              # "zstd-sys 2.0.1+zstd.1.5.2 (registry+https://github.com/rust-lang/crates.io-index)" =
-              #   old: {
-              #     nativeBuildInputs = [ pkg-config ];
-              #     propagatedBuildInputs = [ zstd ];
-              #   };
+          buildCrateOverrides = with pkgs; {
+            # Use package id format `pkgname version (registry)` to reference a direct or transitive dependency.
+            "zstd-sys 2.0.1+zstd.1.5.2 (registry+https://github.com/rust-lang/crates.io-index)" =
+              old: {
+                nativeBuildInputs = [ pkg-config ];
+                propagatedBuildInputs = [ zstd ];
+              };
 
-              # Use package name to reference local crates.
-              # "mypkg1" = old: { nativeBuildInputs = [ git ]; };
-            };
+            # Use package name to reference local crates.
+            # "mypkg1" = old: { nativeBuildInputs = [ git ]; };
+
+            "mediasoup-sys 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)" =
+              old: {
+                src = "${mediasoup-wrap-patched}/worker";
+
+                nativeBuildInputs = with pkgs; [ meson ninja doxygen cargo ];
+                # buildInputs = with pkgs; [ openssl zstd ];
+
+                dontConfigure = false;
+                preConfigure = "echo PRECONFIGURE";
+                postConfigure = "echo POSTCONFIGURE";
+                dontUseMesonConfigure = true;
+
+                mesonWrapMode = "default";
+                dontUseNinjaBuild = true;
+                dontUseNinjaCheck = true;
+                dontUseNinjaInstall = true;
+              };
+
+            "paste 0.1.18 (registry+https://github.com/rust-lang/crates.io-index)" =
+              old: {
+                procMacro = false;
+              };
+          };
 
           # We use the rustc from nixpkgs by default.
           # But you can override it, for example, with a nightly version from https://github.com/oxalica/rust-overlay
@@ -147,20 +160,27 @@
           tag = "latest";
           # Config options reference:
           # https://github.com/moby/moby/blob/master/image/spec/v1.2.md#image-json-field-descriptions
-          config = { Cmd = [ "${defaultPackage}/bin/openmicc-server" ]; };
-          contents = with pkgs; [
-            bash # bash
-            coreutils # ls, cat, etc
-            inetutils # ip, ifconfig, etc.
-            iana-etc # /etc/protocols
-            netcat-gnu # nc
-            defaultPackage # openmicc-server
-          ];
+          config = { Cmd = [ "/bin/openmicc_server" ]; };
+          copyToRoot = pkgs.buildEnv {
+            name = "image-root";
+            paths = with pkgs; [
+              bashInteractive # bash
+              coreutils # ls, cat, etc
+              inetutils # ip, ifconfig, etc.
+              iana-etc # /etc/protocols
+              netcat-gnu # nc
+              defaultPackage # openmicc-server
+            ];
+            pathsToLink = [ "/bin" ];
+          };
         };
 
-        packages.nocargo = nocargo-pkg.release.openmicc-server;
+        packages.nocargo = nocargo-pkg.release.openmicc-server.bin;
 
-        defaultPackage = rustPlatform.buildRustPackage {
+        packages.default = packages.nocargo;
+        defaultPackage = packages.default;
+
+        packages.rustPackage = rustPlatform.buildRustPackage {
           pname = "openmicc-server";
           version = "0.1.0";
 
