@@ -12,7 +12,6 @@ use openmicc_server::{
     signup_list::start_signup_list,
     stage::start_stage,
 };
-use redis::Client as RedisClient;
 use tracing::info;
 
 #[derive(Parser)]
@@ -20,10 +19,6 @@ struct Opts {
     /// Port to serve on
     #[clap(default_value_t = 3050)]
     port: u16,
-
-    /// Redis connection string
-    #[clap(default_value = "redis://127.0.0.1:6379", env = "REDIS_URL")]
-    redis: String,
 }
 
 fn init_tracing() {
@@ -37,9 +32,7 @@ async fn main() -> anyhow::Result<()> {
     let opts = Opts::parse();
 
     // Start signup list
-    info!("Connecting to redis at {}", opts.redis);
-    let redis = RedisClient::open(opts.redis).context("creating redis client")?;
-    let signup_list = start_signup_list(redis).context("starting signup list")?;
+    let signup_list = start_signup_list().context("starting signup list")?;
 
     let worker_manager = WorkerManager::new();
     let worker = create_worker(&worker_manager)

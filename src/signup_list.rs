@@ -3,13 +3,11 @@ use std::collections::HashSet;
 use actix::prelude::*;
 use actix::{Actor, Context};
 use anyhow::{anyhow, bail, Context as AnyhowContext};
-use redis::{Client as RedisClient, Commands, Connection as RedisConnection, RedisResult};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tracing::{info, instrument, warn};
 
 use crate::constants::{REMOVAL_TOPIC, SIGNUP_COUNTER, SIGNUP_LIST, SIGNUP_TOPIC};
-use crate::redis_subscriber::{RedisMessage, RedisSubscriber, RedisSubscriberMessage};
 use crate::signup_list_entry::{
     EntryAndReceipt, IdAndReceipt, SignupId, SignupListEntry, SignupListEntryText,
 };
@@ -65,11 +63,8 @@ impl Handler<RedisMessage> for ListKeeper {
     }
 }
 
-pub fn start_signup_list(redis: RedisClient) -> anyhow::Result<MyAddr<ListKeeper>> {
-    // TODO: actors should be able to reconnect to redis
-    // (or just die & restart would be fine)
-    // ((but then how do others get the new address?))
-    let actor = ListKeeper::try_new(redis)?;
+pub fn start_signup_list() -> anyhow::Result<MyAddr<ListKeeper>> {
+    let actor = ListKeeper::new();
     let addr = actor.start().wrap();
     Ok(addr)
 }
@@ -181,10 +176,6 @@ pub mod user_api {
 }
 
 pub struct ListKeeper {
-    /// Resdis client
-    client: RedisClient,
-    /// Redis connection
-    redis: RedisConnection,
     /// Users who are subscribed to the list
     users: HashSet<MyAddr<UserSession>>,
     /// Enumerate updates so that clients
@@ -195,17 +186,11 @@ pub struct ListKeeper {
 /// Struct Lifecycle
 impl ListKeeper {
     #[instrument]
-    pub fn try_new(client: RedisClient) -> anyhow::Result<Self> {
-        let redis = client.get_connection()?;
-
+    pub fn new() -> Self {
         let new = Self {
-            client,
-            redis,
             users: Default::default(),
             update_counter: Default::default(),
         };
-
-        Ok(new)
     }
 
     #[instrument(skip_all)]
@@ -298,7 +283,7 @@ impl ListKeeper {
 
     #[instrument(skip(self))]
     fn get_list_as<T: DeserializeOwned>(&mut self) -> anyhow::Result<Vec<T>> {
-        get_list_as(&mut self.redis)
+        get_list_as()
     }
 
     #[instrument(skip(self))]
@@ -393,7 +378,7 @@ impl Actor for ListKeeper {
 }
 
 #[instrument(skip(conn))]
-fn get_raw_list(conn: &mut RedisConnection) -> RedisResult<Vec<String>> {
+fn get_raw_list() -> RedisResult<Vec<String>> {
     let result = conn.lrange(SIGNUP_LIST, 0, -1);
     let encoded_list: Vec<String> = result?;
 
@@ -408,7 +393,7 @@ fn deserialize_list<T: DeserializeOwned>(raw_list: &Vec<String>) -> serde_json::
 }
 
 #[instrument(skip(conn))]
-fn get_list_as<T: DeserializeOwned>(conn: &mut RedisConnection) -> anyhow::Result<Vec<T>> {
+fn get_list_as<T: DeserializeOwned>() -> anyhow::Result<Vec<T>> {
     let raw_list = get_raw_list(conn).context("getting raw list")?;
     let list = deserialize_list(&raw_list).context("deserializing list")?;
 

@@ -1,6 +1,5 @@
 use std::{convert::Infallible, fmt::Display, ops::Deref, str::FromStr};
 
-use redis::{FromRedisValue, ToRedisArgs};
 use serde::{Deserialize, Serialize};
 
 use crate::signup_receipt::SignupReceipt;
@@ -30,21 +29,6 @@ impl FromStr for SignupId {
 impl From<SignupIdInner> for SignupId {
     fn from(inner: SignupIdInner) -> Self {
         Self(inner)
-    }
-}
-
-impl FromRedisValue for SignupId {
-    fn from_redis_value(v: &redis::Value) -> redis::RedisResult<Self> {
-        FromRedisValue::from_redis_value(v).map(Self)
-    }
-}
-
-impl ToRedisArgs for SignupId {
-    fn write_redis_args<W>(&self, out: &mut W)
-    where
-        W: ?Sized + redis::RedisWrite,
-    {
-        self.0.write_redis_args(out)
     }
 }
 
