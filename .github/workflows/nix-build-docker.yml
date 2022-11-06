@@ -28,7 +28,7 @@ jobs:
         authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
     # Install required packages for nix build & push
     - name: "Install packages"
-      run: nix-env -iA nixpkgs.cachix nixpkgs.skopeo
+      run: nix-env -iA nixos.cachix nixos.skopeo
     # Set up cachix (avoid unnecessary rebuilds)
     # - run: cachix use "$CACHIX_CACHE_NAME"
     # Login to GitHub image registry
