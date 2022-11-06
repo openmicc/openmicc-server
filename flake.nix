@@ -155,6 +155,10 @@
             udev
             meson
             ninja
+
+            sops
+            gh
+            terraform
           ];
 
           buildInputs = with pkgs; [ openssl zstd ];

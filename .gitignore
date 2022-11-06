@@ -1,2 +1,7 @@
-/target
+/target/
+result
 .trigger
+*.lock*
+*.tfstate
+*.backup
+terraform/
