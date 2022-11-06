@@ -19,10 +19,10 @@ type WebSocketWriter = websocket::sync::Writer<websocket::stream::sync::TcpStrea
 
 #[derive(Parser)]
 struct Opts {
-    #[arg(default_value = "ws://localhost:3050")]
+    #[clap(default_value = "ws://localhost:3050")]
     url: String,
 
-    #[command(subcommand)]
+    #[clap(subcommand)]
     command: Command,
 }
 

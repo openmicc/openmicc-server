@@ -18,11 +18,11 @@ use tracing::info;
 #[derive(Parser)]
 struct Opts {
     /// Port to serve on
-    #[arg(default_value_t = 3050)]
+    #[clap(default_value_t = 3050)]
     port: u16,
 
     /// Redis connection string
-    #[arg(default_value = "redis://127.0.0.1:6379", env = "REDIS_URL")]
+    #[clap(default_value = "redis://127.0.0.1:6379", env = "REDIS_URL")]
     redis: String,
 }
 
